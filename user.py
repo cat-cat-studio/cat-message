@@ -1,3 +1,5 @@
+#https://github.com/xhdndmm/cat-message
+
 import tkinter as tk
 from tkinter import scrolledtext
 import socket
@@ -73,7 +75,7 @@ def connect_client():
         username_entry.config(state=tk.DISABLED)
 
 root = tk.Tk()
-root.title("Chat App")
+root.title("cat-message-user")
 
 connection_frame = tk.Frame(root)
 connection_frame.grid(row=0, column=0, columnspan=2, pady=5)
