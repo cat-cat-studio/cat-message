@@ -37,10 +37,10 @@ class ChatReceiver(QThread):
                 data = json.loads(decoded)
                 if data.get("type") == "history":
                     for msg in data["data"]:
-                        text = f"{msg['username']} ({msg['time']}): {msg['message']}"
+                        text = f"{msg['username']} ({msg['time']}, {msg.get('ip', 'unknown')}): {msg['message']}"
                         self.new_message.emit(text)
                 else:
-                    text = f"{data['username']} ({data.get('time', 'unknown')}): {data['message']}"
+                    text = f"{data['username']} ({data.get('time', 'unknown')}, {data.get('ip', 'unknown')}): {data['message']}"
                     self.new_message.emit(text)
             except Exception as e:
                 break
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("cat-message-user-v1.1")
+        self.setWindowTitle("cat-message-user-v1.2")
         central = QWidget()
         self.setCentralWidget(central)
         v_layout = QVBoxLayout()
@@ -128,6 +128,11 @@ class MainWindow(QMainWindow):
         self.chat_area.append(msg)
         
     def closeEvent(self, event):
+        if self.client_socket:
+            try:
+                self.client_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
         if self.receiver_thread:
             self.receiver_thread.stop()
         if self.client_socket:

@@ -1,4 +1,21 @@
-#https://github.com/xhdndmm/cat-message
+print('''
+###################################################################
+#              __                                                
+#  _________ _/ /_      ____ ___  ___  ______________ _____ ____ 
+# / ___/ __ `/ __/_____/ __ `__ \/ _ \/ ___/ ___/ __ `/ __ `/ _ \
+#/ /__/ /_/ / /_/_____/ / / / / /  __(__  |__  ) /_/ / /_/ /  __/
+#\___/\__,_/\__/     /_/ /_/ /_/\___/____/____/\__,_/\__, /\___/ 
+#                                                   /____/       
+#cat-message-server-v1.2
+#https://github.com/xhdndmm/cat-message      
+#你可以输入stop来停止服务器
+#You can enter stop to stop the server
+#服务器日志：./server.log      
+#Server log: ./server.log
+#聊天记录：./chat.json
+#Chat log: ./chat.json
+###################################################################      
+''')
 
 import socket
 import threading
@@ -7,8 +24,6 @@ import os
 import base64
 from datetime import datetime
 import logging
-
-print("cat-message-server-v1.1")
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -87,18 +102,45 @@ def send_chat_history(client_socket):
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(('0.0.0.0', 12345))
     server.listen(5)
+    server.settimeout(1)
     logging.info("Server started on port 12345")
 
-    while True:
-        try:
-            client_socket, addr = server.accept()
-            logging.info(f"Connection from {addr} established")
-            clients.append(client_socket)
-            send_chat_history(client_socket)
-            threading.Thread(target=handle_client, args=(client_socket,), daemon=True).start()
-        except Exception as e:
-            logging.error(f"Error accepting connection: {e}")
+    shutdown_flag = False
 
-start_server()
+    def input_listener():
+        nonlocal shutdown_flag
+        while True:
+            if input().strip().lower() == "stop":
+                shutdown_flag = True
+                break
+
+    threading.Thread(target=input_listener, daemon=True).start()
+
+    try:
+        while not shutdown_flag:
+            try:
+                client_socket, addr = server.accept()
+                logging.info(f"Connection from {addr} established")
+                clients.append(client_socket)
+                send_chat_history(client_socket)
+                threading.Thread(target=handle_client, args=(client_socket,), daemon=True).start()
+            except socket.timeout:
+                pass
+            except socket.error as e:
+                logging.error(f"Socket error: {e}")
+    except Exception as e:
+        logging.error(f"Error in server loop: {e}")
+    finally:
+        for client in clients:
+            try:
+                client.close()
+            except Exception:
+                pass
+        server.close()
+        logging.info("Server shut down gracefully")
+
+if __name__ == "__main__":
+    start_server()
