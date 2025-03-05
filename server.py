@@ -1,6 +1,6 @@
 print('''
 ###################################################################
-#cat-message-server-v1.2
+#cat-message-server-v1.3
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
@@ -8,6 +8,8 @@ print('''
 #Server log: ./server.log
 #聊天记录：./chat.json
 #Chat log: ./chat.json
+#请确保你的服务器已经开启12345端口
+#Please make sure your server has opened port 12345
 ###################################################################      
 ''')
 
@@ -44,6 +46,7 @@ def read_message(sock):
     return bytes(buffer)
 
 def handle_client(client_socket):
+    verified = False
     while True:
         try:
             raw_message = read_message(client_socket)
@@ -51,6 +54,24 @@ def handle_client(client_socket):
                 break
             decoded = base64.b64decode(raw_message).decode('utf-8')
             data = json.loads(decoded)
+            if not verified:
+                if data.get("command") == "verify":
+                    if data.get("payload") == "cat-message-v1.3":
+                        response = {"type": "verify", "status": "ok"}
+                        send_to_client(json.dumps(response), client_socket)
+                        verified = True
+                        continue
+                    else:
+                        response = {"type": "verify", "status": "fail", "message": "验证失败: 无效的验证信息"}
+                        send_to_client(json.dumps(response), client_socket)
+                        break
+                else:
+                    response = {"type": "verify", "status": "fail", "message": "验证失败: 未收到验证信息"}
+                    send_to_client(json.dumps(response), client_socket)
+                    break
+            if data.get("command") == "load_history":
+                send_chat_history(client_socket)
+                continue
             data["ip"] = client_socket.getpeername()[0]
             if "time" not in data:
                 data["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -119,7 +140,6 @@ def start_server():
                 client_socket, addr = server.accept()
                 logging.info(f"Connection from {addr} established")
                 clients.append(client_socket)
-                send_chat_history(client_socket)
                 threading.Thread(target=handle_client, args=(client_socket,), daemon=True).start()
             except socket.timeout:
                 pass

@@ -5,7 +5,7 @@ import socket
 import json
 import base64
 from datetime import datetime
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox, QAction
 from PyQt5.QtCore import QThread, pyqtSignal
 
 def read_message(sock):
@@ -53,17 +53,22 @@ class ChatReceiver(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        toolbar = self.addToolBar("功能栏")
+        toolbar.setMovable(False)
+        about_action = QAction("关于", self)
+        about_action.triggered.connect(self.show_about)
+        toolbar.addAction(about_action)
         self.client_socket = None
         self.receiver_thread = None
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("cat-message-user-v1.2")
+        self.setWindowTitle("cat-message-user-v1.3")
         central = QWidget()
         self.setCentralWidget(central)
         v_layout = QVBoxLayout()
         h_conn = QHBoxLayout()
-        h_conn.addWidget(QLabel("服务器IP:"))
+        h_conn.addWidget(QLabel("服务器地址:"))
         self.server_ip_edit = QLineEdit()
         h_conn.addWidget(self.server_ip_edit)
         h_conn.addWidget(QLabel("用户名:"))
@@ -76,6 +81,14 @@ class MainWindow(QMainWindow):
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
         v_layout.addWidget(self.chat_area)
+        h_load = QHBoxLayout()
+        self.load_history_btn = QPushButton("加载聊天记录")
+        self.load_history_btn.clicked.connect(self.load_history)
+        h_load.addWidget(self.load_history_btn)
+        self.disconnect_btn = QPushButton("断开连接")
+        self.disconnect_btn.clicked.connect(self.disconnect_from_server)
+        h_load.addWidget(self.disconnect_btn)
+        v_layout.addLayout(h_load)
         h_msg = QHBoxLayout()
         self.message_edit = QLineEdit()
         h_msg.addWidget(self.message_edit)
@@ -89,18 +102,39 @@ class MainWindow(QMainWindow):
         server_ip = self.server_ip_edit.text().strip()
         username = self.username_edit.text().strip()
         if not server_ip or not username:
-            QMessageBox.warning(self, "警告", "请输入服务器IP和用户名")
+            QMessageBox.warning(self, "警告", "请输入服务器地址和用户名")
             return
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((server_ip, 12345))
-        except Exception as e:
-            retry = QMessageBox.question(self, "连接错误", "无法连接到服务器，是否重试？\n取消以更改服务器IP。",
-                                         QMessageBox.Retry | QMessageBox.Cancel)
-            if retry == QMessageBox.Retry:
-                self.connect_to_server()
-            else:
+            verify_payload = {"command": "verify", "payload": "cat-message-v1.3"}
+            json_verify = json.dumps(verify_payload)
+            encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
+            self.client_socket.sendall(encrypted_verify)
+            self.client_socket.settimeout(5)
+            response_data = read_message(self.client_socket)
+            self.client_socket.settimeout(None)
+            if not response_data:
+                raise Exception("未收到验证响应")
+            decoded_resp = base64.b64decode(response_data).decode('utf-8')
+            resp = json.loads(decoded_resp)
+            if not (resp.get("type") == "verify" and resp.get("status") == "ok"):
+                QMessageBox.warning(self, "验证失败", f"服务器验证失败: {resp.get('message', '未知错误')}")
+                self.client_socket.close()
+                self.client_socket = None
+                self.server_ip_edit.setDisabled(False)
+                self.username_edit.setDisabled(False)
+                self.connect_btn.setDisabled(False)
                 return
+        except Exception as e:
+            QMessageBox.warning(self, "验证失败", f"服务器验证异常: {str(e)}")
+            if self.client_socket:
+                self.client_socket.close()
+            self.client_socket = None
+            self.server_ip_edit.setDisabled(False)
+            self.username_edit.setDisabled(False)
+            self.connect_btn.setDisabled(False)
+            return
         self.server_ip_edit.setDisabled(True)
         self.username_edit.setDisabled(True)
         self.connect_btn.setDisabled(True)
@@ -124,8 +158,43 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "发送错误", "消息发送失败")
         self.message_edit.clear()
         
+    def load_history(self):
+        if not self.client_socket:
+            QMessageBox.warning(self, "警告", "尚未连接服务器")
+            return
+        self.chat_area.clear()
+        try:
+            payload = {"command": "load_history"}
+            json_payload = json.dumps(payload)
+            encrypted = base64.b64encode(json_payload.encode('utf-8'))
+            self.client_socket.sendall(encrypted)
+        except Exception as e:
+            QMessageBox.warning(self, "加载错误", "加载聊天记录失败")
+        
     def update_chat(self, msg):
         self.chat_area.append(msg)
+        
+    def disconnect_from_server(self):
+        if self.client_socket:
+            try:
+                self.client_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                self.client_socket.close()
+            except Exception:
+                pass
+            self.client_socket = None
+        if self.receiver_thread:
+            self.receiver_thread.stop()
+            self.receiver_thread = None
+        self.server_ip_edit.setDisabled(False)
+        self.username_edit.setDisabled(False)
+        self.connect_btn.setDisabled(False)
+        self.update_chat("已断开与服务器的连接。")
+        
+    def show_about(self):
+        QMessageBox.information(self, "关于", "cat-message-user-v1.3\nhttps://github.com/xhdndmm/cat-message")
         
     def closeEvent(self, event):
         if self.client_socket:
