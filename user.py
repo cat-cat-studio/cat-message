@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("cat-message-user-v1.4-beta")
+        self.setWindowTitle("cat-message-user-v1.3")
         central = QWidget()
         self.setCentralWidget(central)
         v_layout = QVBoxLayout()
@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((server_ip, 12345))
-            verify_payload = {"command": "verify", "payload": "cat-message-v1.4-beta"}
+            verify_payload = {"command": "verify", "payload": "cat-message-v1.3"}
             json_verify = json.dumps(verify_payload)
             encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
             self.client_socket.sendall(encrypted_verify)
