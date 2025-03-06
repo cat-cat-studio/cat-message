@@ -1,6 +1,6 @@
 print('''
 ###################################################################
-#cat-message-server-v1.3
+#cat-message-server-v1.4-beta
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
@@ -20,6 +20,7 @@ import os
 import base64
 from datetime import datetime
 import logging
+from flask import Flask, render_template_string, jsonify
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -33,6 +34,33 @@ else:
     MESSAGE_LOG = []
 
 clients = []
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Cat Message 网页端</title>
+    </head>
+    <body>
+      <h1>欢迎使用 Cat Message 网页端</h1>
+      <p>访问 <a href="/history">/history</a> 获取聊天记录（JSON格式）</p>
+    </body>
+    </html>
+    """
+    return render_template_string(html_content)
+
+@app.route('/history')
+def history():
+    global MESSAGE_LOG
+    return jsonify(MESSAGE_LOG)
+
+def run_flask():
+    app.run(host='0.0.0.0', port=54321, debug=True)
 
 def read_message(sock):
     buffer = bytearray()
@@ -56,7 +84,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.3":
+                    if data.get("payload") == "cat-message-v1.4-beta":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -157,4 +185,6 @@ def start_server():
         logging.info("Server shut down gracefully")
 
 if __name__ == "__main__":
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     start_server()
