@@ -1,9 +1,11 @@
 print('''
 ###################################################################
-#cat-message-server-v1.3
+#cat-message-server-v1.4_beta
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
+#你可以输入clear_history来清除聊天记录
+#You can enter clear_history to clear chat history      
 #服务器日志：./server.log      
 #Server log: ./server.log
 #聊天记录：./chat.json
@@ -56,7 +58,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.3":
+                    if data.get("payload") == "cat-message-v1.4_beta":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -128,7 +130,18 @@ def start_server():
     def input_listener():
         nonlocal shutdown_flag
         while True:
-            if input().strip().lower() == "stop":
+            cmd = input().strip().lower()
+            if cmd == "clear_history":
+                global MESSAGE_LOG
+                MESSAGE_LOG = []
+                try:
+                    with open("chat.json", "w") as file:
+                        file.write("[]")
+                    logging.info("聊天记录已清除")
+                    print("聊天记录已清除")
+                except Exception as e:
+                    logging.error(f"错误清除聊天记录: {e}")
+            elif cmd == "stop":
                 shutdown_flag = True
                 break
 
