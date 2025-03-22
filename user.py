@@ -5,8 +5,9 @@ import socket
 import json
 import base64
 from datetime import datetime
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox, QAction
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtGui import QAction
 
 def read_message(sock):
     buffer = bytearray()
@@ -21,6 +22,7 @@ def read_message(sock):
 
 class ChatReceiver(QThread):
     new_message = pyqtSignal(str)
+    update_online_users = pyqtSignal(int)
     
     def __init__(self, client_socket):
         super().__init__()
@@ -39,6 +41,8 @@ class ChatReceiver(QThread):
                     for msg in data["data"]:
                         text = f"{msg['username']} ({msg['time']}, {msg.get('ip', 'unknown')}): {msg['message']}"
                         self.new_message.emit(text)
+                elif data.get("type") == "online_users":
+                    self.update_online_users.emit(data["count"])
                 else:
                     text = f"{data['username']} ({data.get('time', 'unknown')}, {data.get('ip', 'unknown')}): {data['message']}"
                     self.new_message.emit(text)
@@ -53,15 +57,18 @@ class ChatReceiver(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowOpacity(0.95)
+        self.init_ui()
         toolbar = self.addToolBar("功能栏")
         toolbar.setMovable(False)
         about_action = QAction("关于", self)
         about_action.triggered.connect(self.show_about)
         toolbar.addAction(about_action)
+        self.online_users_label = QLabel("在线人数: 0")
+        toolbar.addWidget(self.online_users_label)
         self.client_socket = None
         self.receiver_thread = None
-        self.init_ui()
-        
+
     def init_ui(self):
         self.setWindowTitle("cat-message-user-v1.4_beta")
         central = QWidget()
@@ -140,6 +147,7 @@ class MainWindow(QMainWindow):
         self.connect_btn.setDisabled(True)
         self.receiver_thread = ChatReceiver(self.client_socket)
         self.receiver_thread.new_message.connect(self.update_chat)
+        self.receiver_thread.update_online_users.connect(self.update_online_users)
         self.receiver_thread.start()
         
     def send_message(self):
@@ -173,6 +181,9 @@ class MainWindow(QMainWindow):
         
     def update_chat(self, msg):
         self.chat_area.append(msg)
+        
+    def update_online_users(self, count):
+        self.online_users_label.setText(f"在线人数: {count}")
         
     def disconnect_from_server(self):
         if self.client_socket:
@@ -215,4 +226,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

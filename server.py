@@ -48,6 +48,7 @@ def read_message(sock):
     return bytes(buffer)
 
 def handle_client(client_socket):
+    global clients
     verified = False
     while True:
         try:
@@ -62,6 +63,7 @@ def handle_client(client_socket):
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
+                        broadcast_online_users()
                         continue
                     else:
                         response = {"type": "verify", "status": "fail", "message": "验证失败: 无效的验证信息"}
@@ -84,7 +86,15 @@ def handle_client(client_socket):
             break
     if client_socket in clients:
         clients.remove(client_socket)
+        broadcast_online_users()
     client_socket.close()
+
+def broadcast_online_users():
+    global clients
+    count = len(clients)
+    message = json.dumps({"type": "online_users", "count": count})
+    for client in clients:
+        send_to_client(message, client)
 
 def save_message_to_file(username, message, ip, time):
     global MESSAGE_LOG
