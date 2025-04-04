@@ -1,6 +1,6 @@
 print('''
 ###################################################################
-#cat-message-server-v1.4.1-beta
+#cat-message-server-v1.4.1
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
@@ -59,7 +59,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.4.1-beta":
+                    if data.get("payload") == "cat-message-v1.4.1":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -147,13 +147,15 @@ def start_server():
                 try:
                     with open("chat.json", "w") as file:
                         file.write("[]")
-                    logging.info("聊天记录已清除")
+                    logging.info("Chat history cleared")
                     print("聊天记录已清除")
                 except Exception as e:
-                    logging.error(f"错误清除聊天记录: {e}")
+                    logging.error(f"Clear chat history error: {e}")
             elif cmd == "stop":
                 shutdown_flag = True
                 break
+            else:
+                print("无效命令")
 
     threading.Thread(target=input_listener, daemon=True).start()
 
