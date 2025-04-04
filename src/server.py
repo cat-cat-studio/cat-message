@@ -1,6 +1,6 @@
 print('''
 ###################################################################
-#cat-message-server-v1.4
+#cat-message-server-v1.4.1-beta
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
@@ -59,7 +59,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.4":
+                    if data.get("payload") == "cat-message-v1.4.1-beta":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
