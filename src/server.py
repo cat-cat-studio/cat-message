@@ -1,11 +1,13 @@
 print('''
 ###################################################################
-#cat-message-server-v1.4.1
+#cat-message-server-v1.5-beta
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
 #你可以输入clear_history来清除聊天记录
-#You can enter clear_history to clear chat history      
+#You can enter clear_history to clear chat history   
+#你可以输入check_update来检查更新
+#You can enter check_update to check for updates   
 #服务器日志：./server.log      
 #Server log: ./server.log
 #聊天记录：./chat.json
@@ -22,6 +24,7 @@ import os
 import base64
 from datetime import datetime
 import logging
+import requests
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -59,7 +62,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.4.1":
+                    if data.get("payload") == "cat-message-v1.5-beta":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -127,6 +130,29 @@ def send_chat_history(client_socket):
     except Exception as e:
         logging.error(f"Error sending history: {e}")
 
+
+def get_latest_github_release(repo):
+    try:
+        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("tag_name", None)
+    except requests.RequestException as e:
+        logging.warning(f"Failed to check for updates: {str(e)}")
+        return None
+
+def check_for_update():
+    latest_version = get_latest_github_release("xhdndmm/cat-message")
+    current_version = "v1.5-beta"
+    if latest_version is None:
+        print("无法检查更新")
+        return
+    if latest_version == current_version:
+        print("当前已是最新版本")
+    else:
+        print(f"发现新版本: {latest_version}\n注意：不要随便升级，本项目需要确认服务端版本和客户端版本是否一致！")
+
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -154,6 +180,8 @@ def start_server():
             elif cmd == "stop":
                 shutdown_flag = True
                 break
+            elif cmd == "check_update":
+                check_for_update()
             else:
                 print("无效命令")
 
