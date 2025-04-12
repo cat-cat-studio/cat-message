@@ -178,3 +178,6 @@ cython_debug/
 
 #coat history
 chat.json
+
+#config
+config.ini

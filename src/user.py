@@ -8,6 +8,10 @@ from datetime import datetime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QAction
+import requests
+
+REPO = "xhdndmm/cat-message"
+CURRENT_VERSION = "v1.5"
 
 def read_message(sock):
     buffer = bytearray()
@@ -61,6 +65,9 @@ class MainWindow(QMainWindow):
         self.init_ui()
         toolbar = self.addToolBar("功能栏")
         toolbar.setMovable(False)
+        check_update_action = QAction("检查更新", self)
+        check_update_action.triggered.connect(MainWindow.check_for_update)
+        toolbar.addAction(check_update_action)
         about_action = QAction("关于", self)
         about_action.triggered.connect(self.show_about)
         toolbar.addAction(about_action)
@@ -70,7 +77,7 @@ class MainWindow(QMainWindow):
         self.receiver_thread = None
 
     def init_ui(self):
-        self.setWindowTitle("cat-message-user-v1.4.1")
+        self.setWindowTitle("cat-message-user-v1.5")
         central = QWidget()
         self.setCentralWidget(central)
         v_layout = QVBoxLayout()
@@ -78,6 +85,9 @@ class MainWindow(QMainWindow):
         h_conn.addWidget(QLabel("服务器地址:"))
         self.server_ip_edit = QLineEdit()
         h_conn.addWidget(self.server_ip_edit)
+        h_conn.addWidget(QLabel("服务器端口:"))
+        self.server_port_edit = QLineEdit()
+        h_conn.addWidget(self.server_port_edit)
         h_conn.addWidget(QLabel("用户名:"))
         self.username_edit = QLineEdit()
         h_conn.addWidget(self.username_edit)
@@ -107,14 +117,15 @@ class MainWindow(QMainWindow):
         
     def connect_to_server(self):
         server_ip = self.server_ip_edit.text().strip()
+        server_port = self.server_port_edit.text().strip()
         username = self.username_edit.text().strip()
         if not server_ip or not username:
             QMessageBox.warning(self, "警告", "请输入服务器地址和用户名")
             return
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((server_ip, 12345))
-            verify_payload = {"command": "verify", "payload": "cat-message-v1.4.1"}
+            self.client_socket.connect((server_ip, int(server_port)))
+            verify_payload = {"command": "verify", "payload": "cat-message-v1.5"}
             json_verify = json.dumps(verify_payload)
             encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
             self.client_socket.sendall(encrypted_verify)
@@ -133,6 +144,9 @@ class MainWindow(QMainWindow):
                 self.username_edit.setDisabled(False)
                 self.connect_btn.setDisabled(False)
                 return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "端口号必须是数字")
+            return
         except Exception as e:
             QMessageBox.warning(self, "验证失败", f"服务器验证异常: {str(e)}")
             if self.client_socket:
@@ -149,7 +163,7 @@ class MainWindow(QMainWindow):
         self.receiver_thread.new_message.connect(self.update_chat)
         self.receiver_thread.update_online_users.connect(self.update_online_users)
         self.receiver_thread.start()
-        
+
     def send_message(self):
         message = self.message_edit.text().strip()
         if not message:
@@ -205,7 +219,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已断开与服务器的连接。")
         
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.4.1</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.5</a>')
         
     def closeEvent(self, event):
         if self.client_socket:
@@ -221,6 +235,26 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         event.accept()
+     
+    def get_latest_github_release(repo):
+        try:
+            url = f"https://api.github.com/repos/{repo}/releases/latest"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("tag_name", None)
+        except requests.RequestException as e:
+            QMessageBox.warning(None, "更新检查失败", f"无法检查更新: {str(e)}")
+            return None
+
+    def check_for_update():
+        latest_version = MainWindow.get_latest_github_release(REPO)
+        if latest_version is None:
+            return
+        if latest_version == CURRENT_VERSION:
+            QMessageBox.information(None, "检查更新", "当前已是最新版本")
+        else:
+            QMessageBox.information(None, "检查更新", f"发现新版本: {latest_version}\n注意：不要随便升级，本项目需要确认服务端版本和客户端版本是否一致！")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

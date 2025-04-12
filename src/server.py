@@ -1,18 +1,22 @@
 print('''
-###################################################################
-#cat-message-server-v1.4.1
+####################################################################
+#cat-message-server-v1.5
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
 #你可以输入clear_history来清除聊天记录
-#You can enter clear_history to clear chat history      
+#You can enter clear_history to clear chat history   
+#你可以输入check_update来检查更新
+#You can enter check_update to check for updates   
 #服务器日志：./server.log      
 #Server log: ./server.log
 #聊天记录：./chat.json
 #Chat log: ./chat.json
-#请确保你的服务器已经开启12345端口
-#Please make sure your server has opened port 12345
-###################################################################      
+#配置文件：./config.ini
+#Config file：./config.ini
+#请确保你的服务器已经开启12345端口（或者其他端口）
+#Please make sure your server has opened port 12345 (or other port)
+####################################################################      
 ''')
 
 import socket
@@ -22,8 +26,26 @@ import os
 import base64
 from datetime import datetime
 import logging
+import requests
+import configparser
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+config = configparser.ConfigParser()
+config_file = 'config.ini'
+config.read(config_file)
+
+if not os.path.exists(config_file):
+    config = configparser.ConfigParser()
+    config['database'] = {
+        'port': '12345'
+    }
+    with open(config_file, 'w') as f:
+        config.write(f)
+        logging.info("Create config file")
+
+REPO = "xhdndmm/cat-message"
+CURRENT_VERSION = "v1.5"
 
 if os.path.exists("chat.json"):
     try:
@@ -59,7 +81,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.4.1":
+                    if data.get("payload") == "cat-message-v1.5":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -127,13 +149,35 @@ def send_chat_history(client_socket):
     except Exception as e:
         logging.error(f"Error sending history: {e}")
 
+def get_latest_github_release(REPO):
+    try:
+        url = f"https://api.github.com/repos/{REPO}/releases/latest"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("tag_name", None)
+    except requests.RequestException as e:
+        logging.warning(f"Failed to check for updates: {str(e)}")
+        return None
+
+def check_for_update():
+    latest_version = get_latest_github_release(REPO)
+    if latest_version is None:
+        print("无法检查更新")
+        return
+    if latest_version == CURRENT_VERSION:
+        print("当前已是最新版本")
+    else:
+        print(f"发现新版本: {latest_version}\n注意：不要随便升级，本项目需要确认服务端版本和客户端版本是否一致！")
+
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', 12345))
+    port = config.getint('database', 'port')
+    server.bind(('0.0.0.0', port))
     server.listen(5)
     server.settimeout(1)
-    logging.info("Server started on port 12345")
+    logging.info(f"Server started on port {port}")
 
     shutdown_flag = False
 
@@ -154,6 +198,8 @@ def start_server():
             elif cmd == "stop":
                 shutdown_flag = True
                 break
+            elif cmd == "check_update":
+                check_for_update()
             else:
                 print("无效命令")
 
