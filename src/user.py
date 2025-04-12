@@ -11,7 +11,7 @@ from PyQt6.QtGui import QAction
 import requests
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.5-beta"
+CURRENT_VERSION = "v1.5"
 
 def read_message(sock):
     buffer = bytearray()
@@ -77,7 +77,7 @@ class MainWindow(QMainWindow):
         self.receiver_thread = None
 
     def init_ui(self):
-        self.setWindowTitle("cat-message-user-v1.5-beta")
+        self.setWindowTitle("cat-message-user-v1.5")
         central = QWidget()
         self.setCentralWidget(central)
         v_layout = QVBoxLayout()
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((server_ip, int(server_port)))
-            verify_payload = {"command": "verify", "payload": "cat-message-v1.5-beta"}
+            verify_payload = {"command": "verify", "payload": "cat-message-v1.5"}
             json_verify = json.dumps(verify_payload)
             encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
             self.client_socket.sendall(encrypted_verify)
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已断开与服务器的连接。")
         
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.5-beta</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.5</a>')
         
     def closeEvent(self, event):
         if self.client_socket:

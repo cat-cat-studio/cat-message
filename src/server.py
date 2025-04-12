@@ -1,6 +1,6 @@
 print('''
 ####################################################################
-#cat-message-server-v1.5-beta
+#cat-message-server-v1.5
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
 #You can enter stop to stop the server
@@ -45,7 +45,7 @@ if not os.path.exists(config_file):
         logging.info("Create config file")
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.5-beta"
+CURRENT_VERSION = "v1.5"
 
 if os.path.exists("chat.json"):
     try:
@@ -81,7 +81,7 @@ def handle_client(client_socket):
             data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.5-beta":
+                    if data.get("payload") == "cat-message-v1.5":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
