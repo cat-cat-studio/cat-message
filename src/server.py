@@ -42,7 +42,7 @@ if not os.path.exists(config_file):
     }
     with open(config_file, 'w') as f:
         config.write(f)
-        logging.info("Creat config file")
+        logging.info("Create config file")
 
 REPO = "xhdndmm/cat-message"
 CURRENT_VERSION = "v1.5-beta"
@@ -161,7 +161,7 @@ def get_latest_github_release(REPO):
         return None
 
 def check_for_update():
-    latest_version = get_latest_github_release()
+    latest_version = get_latest_github_release(REPO)
     if latest_version is None:
         print("无法检查更新")
         return
@@ -177,7 +177,7 @@ def start_server():
     server.bind(('0.0.0.0', port))
     server.listen(5)
     server.settimeout(1)
-    logging.info("Server started on port ", port)
+    logging.info(f"Server started on port {port}")
 
     shutdown_flag = False
 

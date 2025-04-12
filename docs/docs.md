@@ -47,45 +47,17 @@ python3 server.py
 python3 user.py
 ```
 ### 4.3 服务端进程守护
-如果你在Linux下需要守护进程，请手动配置systemd服务文件。
-```
-sudo vi /etc/systemd/system/cat-message.service
-```
-将以下内容复制到文件中：
-```
-[Unit]
-# 服务名称，可自定义
-Description = cat-message
-After = network.target
-Wants = network.target
-
-[Service]
-Type = simple
-#文件路径请自行更改
-ExecStart = /path/to/python3 /path/to/cat-message/src/server.py
-
-[Install]
-WantedBy = multi-user.target
-```
-管理服务
-```
-# 启动
-sudo systemctl start cat-message
-# 停止
-sudo systemctl stop cat-message
-# 重启
-sudo systemctl restart cat-message
-# 查看状态
-sudo systemctl status cat-message
-```
+如果你在Linux下需要守护进程，建议使用MCSM面板，方便操作。
 ### 4.4 界面
 #### 4.4.1 服务端界面
-服务端并没有设计图形化界面，在命令行内操作。目前有stop命令（关闭服务）和clear_history命令（清除聊天记录）可以输入。使用时会在所在目录创建server.log文件（日志）和chat.json文件（聊天记录）。使用时请确保12345端口为开放状态
+服务端并没有设计图形化界面，在命令行内操作。目前有stop命令（关闭服务），clear_history命令（清除聊天记录）还有check_update（检查更新）可以输入。使用时会在所在目录创建server.log文件（日志）和chat.json文件（聊天记录）。使用时请确保12345端口（默认端口为12345 也可以自定义）为开放状态
 #### 4.4.2 客户端界面
 ![客户端界面截图](/docs/001.png)  
-* 图为1.4.1开发版本的截图  
+* 图为v1.5测试版本的截图  
 
-使用时请在服务器地址输入框填写服务器IP/域名，在用户名输入框填写用户名，然后点击连接按钮连接服务器。若服务器不能正确连接，会提示。默认不加载聊天记录，需要手动点击加载聊天记录按钮来加载聊天记录。使用完毕可以点击断开连接来断开与服务器的连接
+使用时请在服务器地址输入框填写服务器IP/域名，在用户名输入框填写用户名，在端口输入框填写端口，然后点击连接按钮连接服务器。若服务器不能正确连接，会提示。默认不加载聊天记录，需要手动点击加载聊天记录按钮来加载聊天记录。使用完毕可以点击断开连接来断开与服务器的连接
+#### 4.4.3 自定义
+你可以自己在config.ini修改端口（此文件自动创建，默认为12345端口）
 ### 4.5 问题反馈
 程序不可避免会出现BUG，如果你发现有些问题，可以在[这里](https://github.com/xhdndmm/cat-message/issues)反馈。
 ### 4.6 协议

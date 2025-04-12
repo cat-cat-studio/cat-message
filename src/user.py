@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((server_ip, server_port))
+            self.client_socket.connect((server_ip, int(server_port)))
             verify_payload = {"command": "verify", "payload": "cat-message-v1.5-beta"}
             json_verify = json.dumps(verify_payload)
             encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
@@ -144,6 +144,9 @@ class MainWindow(QMainWindow):
                 self.username_edit.setDisabled(False)
                 self.connect_btn.setDisabled(False)
                 return
+        except ValueError:
+            QMessageBox.warning(self, "警告", "端口号必须是数字")
+            return
         except Exception as e:
             QMessageBox.warning(self, "验证失败", f"服务器验证异常: {str(e)}")
             if self.client_socket:
