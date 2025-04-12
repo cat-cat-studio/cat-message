@@ -1,5 +1,5 @@
 print('''
-###################################################################
+####################################################################
 #cat-message-server-v1.5-beta
 #https://github.com/xhdndmm/cat-message      
 #你可以输入stop来停止服务器
@@ -12,9 +12,11 @@ print('''
 #Server log: ./server.log
 #聊天记录：./chat.json
 #Chat log: ./chat.json
-#请确保你的服务器已经开启12345端口
-#Please make sure your server has opened port 12345
-###################################################################      
+#配置文件：./config.ini
+#Config file：./config.ini
+#请确保你的服务器已经开启12345端口（或者其他端口）
+#Please make sure your server has opened port 12345 (or other port)
+####################################################################      
 ''')
 
 import socket
@@ -25,8 +27,25 @@ import base64
 from datetime import datetime
 import logging
 import requests
+import configparser
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+config = configparser.ConfigParser()
+config_file = 'config.ini'
+config.read(config_file)
+
+if not os.path.exists(config_file):
+    config = configparser.ConfigParser()
+    config['database'] = {
+        'port': '12345'
+    }
+    with open(config_file, 'w') as f:
+        config.write(f)
+        logging.info("Creat config file")
+
+REPO = "xhdndmm/cat-message"
+CURRENT_VERSION = "v1.5-beta"
 
 if os.path.exists("chat.json"):
     try:
@@ -130,10 +149,9 @@ def send_chat_history(client_socket):
     except Exception as e:
         logging.error(f"Error sending history: {e}")
 
-
-def get_latest_github_release(repo):
+def get_latest_github_release(REPO):
     try:
-        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        url = f"https://api.github.com/repos/{REPO}/releases/latest"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -143,12 +161,11 @@ def get_latest_github_release(repo):
         return None
 
 def check_for_update():
-    latest_version = get_latest_github_release("xhdndmm/cat-message")
-    current_version = "v1.5-beta"
+    latest_version = get_latest_github_release()
     if latest_version is None:
         print("无法检查更新")
         return
-    if latest_version == current_version:
+    if latest_version == CURRENT_VERSION:
         print("当前已是最新版本")
     else:
         print(f"发现新版本: {latest_version}\n注意：不要随便升级，本项目需要确认服务端版本和客户端版本是否一致！")
@@ -156,10 +173,11 @@ def check_for_update():
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', 12345))
+    port = config.getint('database', 'port')
+    server.bind(('0.0.0.0', port))
     server.listen(5)
     server.settimeout(1)
-    logging.info("Server started on port 12345")
+    logging.info("Server started on port ", port)
 
     shutdown_flag = False
 

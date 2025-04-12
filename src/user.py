@@ -13,7 +13,6 @@ import requests
 REPO = "xhdndmm/cat-message"
 CURRENT_VERSION = "v1.5-beta"
 
-
 def read_message(sock):
     buffer = bytearray()
     while True:
@@ -86,6 +85,9 @@ class MainWindow(QMainWindow):
         h_conn.addWidget(QLabel("服务器地址:"))
         self.server_ip_edit = QLineEdit()
         h_conn.addWidget(self.server_ip_edit)
+        h_conn.addWidget(QLabel("服务器端口:"))
+        self.server_port_edit = QLineEdit()
+        h_conn.addWidget(self.server_port_edit)
         h_conn.addWidget(QLabel("用户名:"))
         self.username_edit = QLineEdit()
         h_conn.addWidget(self.username_edit)
@@ -115,13 +117,14 @@ class MainWindow(QMainWindow):
         
     def connect_to_server(self):
         server_ip = self.server_ip_edit.text().strip()
+        server_port = self.server_port_edit.text().strip()
         username = self.username_edit.text().strip()
         if not server_ip or not username:
             QMessageBox.warning(self, "警告", "请输入服务器地址和用户名")
             return
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((server_ip, 12345))
+            self.client_socket.connect((server_ip, server_port))
             verify_payload = {"command": "verify", "payload": "cat-message-v1.5-beta"}
             json_verify = json.dumps(verify_payload)
             encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
@@ -157,7 +160,7 @@ class MainWindow(QMainWindow):
         self.receiver_thread.new_message.connect(self.update_chat)
         self.receiver_thread.update_online_users.connect(self.update_online_users)
         self.receiver_thread.start()
-        
+
     def send_message(self):
         message = self.message_edit.text().strip()
         if not message:
