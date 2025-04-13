@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <title>cat-message docs</title>
+    <script src="https://cdn.jsdelivr.net/npm/showdown/dist/showdown.min.js"></script>
+</head>
+<body>
+    <div id="markdown-content"></div>
+    <script>
+        async function loadMarkdown() {
+            const response = await fetch('./docs.md');
+            const markdown = await response.text();
+            const converter = new showdown.Converter();
+            const html = converter.makeHtml(markdown);
+            document.getElementById('markdown-content').innerHTML = html;
+        }
+        loadMarkdown();
+    </script>
+</body>
+</html>
