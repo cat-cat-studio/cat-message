@@ -7,4 +7,4 @@
 其他操作系统请自行下载源码并运行  
 请遵守[GPL-3.0](LICENSE)协议
 
-**详细说明请阅读[文档](docs/docs.md)**
+**详细说明请阅读[文档](https://cat-cat-studio.github.io/cat-message/)**
