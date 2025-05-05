@@ -28,6 +28,7 @@ from datetime import datetime
 import logging
 import requests
 import configparser
+import zlib
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -59,6 +60,7 @@ else:
 clients = []
 
 def read_message(sock):
+    """读取并处理网络消息（含解压）"""
     buffer = bytearray()
     while True:
         chunk = sock.recv(1024)
@@ -67,13 +69,22 @@ def read_message(sock):
         buffer.extend(chunk)
         if len(chunk) < 1024:
             break
-    return bytes(buffer)
+    try:
+        # 先解base64再解压
+        decompressed = zlib.decompress(base64.b64decode(buffer))
+        return json.loads(decompressed.decode('utf-8'))
+    except:
+        # 兼容旧数据
+        return json.loads(base64.b64decode(buffer).decode('utf-8'))
+
 
 def handle_client(client_socket):
+    """客户端处理线程"""
     global clients
     verified = False
     while True:
         try:
+            data = read_message(client_socket)
             raw_message = read_message(client_socket)
             if not raw_message:
                 break
@@ -95,21 +106,27 @@ def handle_client(client_socket):
                     response = {"type": "verify", "status": "fail", "message": "验证失败: 未收到验证信息"}
                     send_to_client(json.dumps(response), client_socket)
                     break
+            # 处理历史请求（分页加载）
             if data.get("command") == "load_history":
-                send_chat_history(client_socket)
+                page = data.get("page", 0)
+                page_size = 20  # 每页20条
+                start = max(0, len(MESSAGE_LOG) - (page+1)*page_size)
+                end = len(MESSAGE_LOG) - page*page_size
+                send_chat_history(client_socket, start, end)
                 continue
-            data["ip"] = client_socket.getpeername()[0]
-            if "time" not in data:
-                data["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            processed_message = json.dumps(data)
-            broadcast(processed_message, client_socket, data)
+            
+            # 存储消息时记录类型
+            msg_data = {
+                "username": data["username"],
+                "message": data["message"],
+                "ip": client_socket.getpeername()[0],
+                "time": data.get("time", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                "content_type": data.get("content_type", "text")  # 新增类型字段
+            }
+            broadcast(msg_data, client_socket)
+            
         except Exception as e:
-            logging.error(f"Client disconnected: {e}")
             break
-    if client_socket in clients:
-        clients.remove(client_socket)
-        broadcast_online_users()
-    client_socket.close()
 
 def broadcast_online_users():
     global clients
@@ -124,11 +141,24 @@ def save_message_to_file(username, message, ip, time):
     with open("chat.json", "w") as file:
         json.dump(MESSAGE_LOG, file, ensure_ascii=False, indent=4)
 
-def broadcast(message, client_socket, data):
+def broadcast(data, client_socket):
+    """广播消息并存储"""
+    global MESSAGE_LOG
+    # 存储到历史记录
+    MESSAGE_LOG.append(data)
+    # 广播给其他客户端
+    message = json.dumps(data)
     for client in clients:
         if client != client_socket:
-            send_to_client(message, client)
-    save_message_to_file(data["username"], data["message"], data["ip"], data["time"])
+            try:
+                compressed = zlib.compress(message.encode('utf-8'))  # 压缩
+                encrypted = base64.b64encode(compressed)
+                client.sendall(encrypted)
+            except Exception as e:
+                logging.error(f"广播失败: {e}")
+    # 保存到文件
+    with open("chat.json", "w") as f:
+        json.dump(MESSAGE_LOG, f, ensure_ascii=False, indent=4)
 
 def send_to_client(message, client_socket):
     try:
@@ -140,14 +170,20 @@ def send_to_client(message, client_socket):
             clients.remove(client_socket)
         client_socket.close()
 
-def send_chat_history(client_socket):
+def send_chat_history(client_socket, start, end):
+    """分页发送历史记录"""
     try:
-        history_payload = {"type": "history", "data": MESSAGE_LOG}
-        json_payload = json.dumps(history_payload)
-        encrypted = base64.b64encode(json_payload.encode('utf-8'))
-        client_socket.sendall(encrypted)
+        for msg in MESSAGE_LOG[start:end]:
+            history_payload = {
+                "type": "history",
+                "data": [msg]  # 每次发送一条
+            }
+            json_data = json.dumps(history_payload).encode('utf-8')
+            compressed = zlib.compress(json_data)  # 压缩数据
+            encrypted = base64.b64encode(compressed)
+            client_socket.sendall(encrypted)
     except Exception as e:
-        logging.error(f"Error sending history: {e}")
+        logging.error(f"发送历史失败: {e}")
 
 def get_latest_github_release(REPO):
     try:
@@ -176,7 +212,7 @@ def start_server():
     port = config.getint('database', 'port')
     server.bind(('0.0.0.0', port))
     server.listen(5)
-    server.settimeout(1)
+    server.settimeout(5)
     logging.info(f"Server started on port {port}")
 
     shutdown_flag = False
@@ -213,7 +249,8 @@ def start_server():
                 clients.append(client_socket)
                 threading.Thread(target=handle_client, args=(client_socket,), daemon=True).start()
             except socket.timeout:
-                pass
+                # 超时后继续循环，避免阻塞
+                continue
             except socket.error as e:
                 logging.error(f"Socket error: {e}")
     except Exception as e:
