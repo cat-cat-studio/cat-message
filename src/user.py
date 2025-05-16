@@ -16,22 +16,28 @@ import requests
 REPO = "xhdndmm/cat-message"
 CURRENT_VERSION = "v1.6" 
 
+def send_message_with_length(sock, data_bytes):
+    # 发送4字节大端长度+数据体
+    length = len(data_bytes)
+    sock.sendall(length.to_bytes(4, byteorder='big'))
+    sock.sendall(data_bytes)
+
 def read_message(sock):
-    """读取网络消息并自动解压"""
+    """读取网络消息并自动解压（带长度头）"""
+    raw_length = sock.recv(4)
+    if not raw_length:
+        return None
+    msg_length = int.from_bytes(raw_length, byteorder='big')
     buffer = bytearray()
-    while True:
-        chunk = sock.recv(1024)
+    while len(buffer) < msg_length:
+        chunk = sock.recv(min(4096, msg_length - len(buffer)))
         if not chunk:
             break
         buffer.extend(chunk)
-        if len(chunk) < 1024:
-            break
     try:
-        # 先解压再base64解码
         decompressed = zlib.decompress(base64.b64decode(buffer))
         return decompressed
     except:
-        # 兼容未压缩的旧数据
         return base64.b64decode(buffer)
 
 class ChatReceiver(QThread):
@@ -55,13 +61,13 @@ class ChatReceiver(QThread):
                 # 处理历史消息
                 if data.get("type") == "history":
                     for msg in data["data"]:
-                        self._process_message(msg)
+                        self.process_message(msg)
                 # 处理在线人数
                 elif data.get("type") == "online_users":
                     self.update_online_users.emit(data["count"])
                 # 处理普通消息
                 else:
-                    self._process_message(data)
+                    self.process_message(data)
             except Exception as e:
                 break
 
@@ -70,7 +76,7 @@ class ChatReceiver(QThread):
         msg_type = data.get("content_type", "text")
         if msg_type == "image":
             # 图片消息特殊处理
-            text = f"{data['username']} ({data.get('time', 'unknown')} [图片]:"
+            text = f"{data['username']} ({data.get('time', 'unknown')}) [图片]:"
             self.new_message.emit(text, data["message"])
         else:
             # 文本消息
@@ -191,22 +197,26 @@ class MainWindow(QMainWindow):
         if not server_ip or not username:
             QMessageBox.warning(self, "警告", "请输入服务器地址和用户名")
             return
+        if not server_port.isdigit():
+            QMessageBox.warning(self, "警告", "端口号必须是数字")
+            return
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.settimeout(10)  # 设置连接超时时间为10秒
             self.client_socket.connect((server_ip, int(server_port)))
             self.client_socket.settimeout(None)  # 连接成功后取消超时限制
-            verify_payload = {"command": "verify", "payload": "cat-message-v1.5"}
-            json_verify = json.dumps(verify_payload)
-            encrypted_verify = base64.b64encode(json_verify.encode('utf-8'))
-            self.client_socket.sendall(encrypted_verify)
+            verify_payload = {"command": "verify", "payload": "cat-message-v1.6"}
+            json_verify = json.dumps(verify_payload).encode('utf-8')
+            compressed_verify = zlib.compress(json_verify)
+            encrypted_verify = base64.b64encode(compressed_verify)
+            send_message_with_length(self.client_socket, encrypted_verify)
             self.client_socket.settimeout(5)
             response_data = read_message(self.client_socket)
             self.client_socket.settimeout(None)
             if not response_data:
                 raise Exception("未收到验证响应")
-            decoded_resp = base64.b64decode(response_data).decode('utf-8')
-            resp = json.loads(decoded_resp)
+            decompressed_resp = zlib.decompress(base64.b64decode(response_data)).decode('utf-8')
+            resp = json.loads(decompressed_resp)
             if not (resp.get("type") == "verify" and resp.get("status") == "ok"):
                 QMessageBox.warning(self, "验证失败", f"服务器验证失败: {resp.get('message', '未知错误')}")
                 self.client_socket.close()
@@ -218,9 +228,6 @@ class MainWindow(QMainWindow):
         except socket.timeout:
             QMessageBox.warning(self, "连接超时", "无法连接到服务器，请检查网络或服务器地址")
             self.client_socket = None
-            return
-        except ValueError:
-            QMessageBox.warning(self, "警告", "端口号必须是数字")
             return
         except Exception as e:
             QMessageBox.warning(self, "连接失败", f"连接服务器时发生错误: {str(e)}")
@@ -252,12 +259,12 @@ class MainWindow(QMainWindow):
         self.message_edit.clear()
 
     def send_payload(self, payload):
-        """发送消息通用方法（含压缩）"""
+        """发送消息通用方法（含压缩和长度头）"""
         try:
             json_data = json.dumps(payload).encode('utf-8')
             compressed = zlib.compress(json_data)  # 压缩数据
             encrypted = base64.b64encode(compressed)
-            self.client_socket.sendall(encrypted)
+            send_message_with_length(self.client_socket, encrypted)
         except Exception as e:
             QMessageBox.warning(self, "错误", "发送失败")
 
@@ -281,20 +288,23 @@ class MainWindow(QMainWindow):
             self.chat_area.append(text)
         
     def load_history(self):
-            if not self.client_socket:   #这里缩进不太对 死活没修好 以后再修***
-                QMessageBox.warning(self, "警告", "尚未连接服务器")
-                return
-            self.chat_area.clear()
-            try:
-                payload = {"command": "load_history"}
-                json_payload = json.dumps(payload)
-                encrypted = base64.b64encode(json_payload.encode('utf-8'))
-                self.client_socket.sendall(encrypted)
-            except Exception as e:
-                QMessageBox.warning(self, "加载错误", "加载聊天记录失败")
+        if not self.client_socket:
+            QMessageBox.warning(self, "警告", "尚未连接服务器")
+            return
+        self.chat_area.clear()
+        try:
+            payload = {"command": "load_history"}
+            json_payload = json.dumps(payload).encode('utf-8')
+            encrypted = base64.b64encode(json_payload)
+            send_message_with_length(self.client_socket, encrypted)
+        except Exception as e:
+            QMessageBox.warning(self, "加载错误", "加载聊天记录失败")
 
-    def update_chat(self, msg):
-        self.chat_area.append(msg)
+    def update_chat(self, text, msg_type="text", img_data=None):
+        if msg_type == "image" and img_data:
+            self.append_message(text, "image", img_data)
+        else:
+            self.chat_area.append(text)
         
     def update_online_users(self, count):
         self.online_users_label.setText(f"在线人数: {count}")
@@ -319,7 +329,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已断开与服务器的连接。")
         
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.5</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.6</a>')
         
     def closeEvent(self, event):
         if self.client_socket:

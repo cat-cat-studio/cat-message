@@ -51,7 +51,7 @@ python3 user.py
 如果你在Linux下需要守护进程，建议使用MCSM面板，方便操作。
 ### 4.4 界面
 #### 4.4.1 服务端界面
-服务端并没有设计图形化界面，在命令行内操作。目前有stop命令（关闭服务），clear_history命令（清除聊天记录）还有check_update（检查更新）可以输入。使用时会在所在目录创建server.log文件（日志）和chat.json文件（聊天记录）。使用时请确保12345端口（默认端口为12345 也可以自定义）为开放状态
+服务端并没有设计图形化界面，在命令行内操作。目前有stop命令（关闭服务），clear_history命令（清除聊天记录）, help命令（帮助）还有check_update（检查更新）可以输入。使用时会在所在目录创建server.log文件（日志）和chat.json文件（聊天记录）。使用时请确保12345端口（默认端口为12345 也可以自定义）为开放状态
 #### 4.4.2 客户端界面
 ![客户端界面截图](./001.png)  
 * 图为v1.5测试版本的截图  
@@ -62,4 +62,4 @@ python3 user.py
 ### 4.5 问题反馈
 程序不可避免会出现BUG，如果你发现有些问题，可以在[这里](https://github.com/xhdndmm/cat-message/issues)反馈。
 ### 4.6 协议
-请遵守[GPL-3.0](/LICENSE)协议
+请遵守[GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)协议

@@ -1,23 +1,8 @@
-print('''
-####################################################################
-#cat-message-server-v1.5
-#https://github.com/xhdndmm/cat-message      
-#你可以输入stop来停止服务器
-#You can enter stop to stop the server
-#你可以输入clear_history来清除聊天记录
-#You can enter clear_history to clear chat history   
-#你可以输入check_update来检查更新
-#You can enter check_update to check for updates   
-#服务器日志：./server.log      
-#Server log: ./server.log
-#聊天记录：./chat.json
-#Chat log: ./chat.json
-#配置文件：./config.ini
-#Config file：./config.ini
-#请确保你的服务器已经开启12345端口（或者其他端口）
-#Please make sure your server has opened port 12345 (or other port)
-####################################################################      
-''')
+#python3
+#server.py
+#https://github.com/xhdndmm/cat-message
+
+print("cat-message-server-v1.6")
 
 import socket
 import threading
@@ -46,7 +31,7 @@ if not os.path.exists(config_file):
         logging.info("Create config file")
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.5"
+CURRENT_VERSION = "v1.6"
 
 if os.path.exists("chat.json"):
     try:
@@ -59,40 +44,52 @@ else:
 
 clients = []
 
+# 读取消息
 def read_message(sock):
-    """读取并处理网络消息（含解压）"""
-    buffer = bytearray()
-    while True:
-        chunk = sock.recv(1024)
-        if not chunk:
-            break
-        buffer.extend(chunk)
-        if len(chunk) < 1024:
-            break
     try:
-        # 先解base64再解压
-        decompressed = zlib.decompress(base64.b64decode(buffer))
-        return json.loads(decompressed.decode('utf-8'))
-    except:
-        # 兼容旧数据
-        return json.loads(base64.b64decode(buffer).decode('utf-8'))
+        raw_length = sock.recv(4)
+        if not raw_length:
+            return None
+        msg_length = int.from_bytes(raw_length, byteorder='big')
+        buffer = bytearray()
+        while len(buffer) < msg_length:
+            chunk = sock.recv(min(4096, msg_length - len(buffer)))
+            if not chunk:
+                break
+            buffer.extend(chunk)
+        try:
+            # 先解base64再解压
+            decompressed = zlib.decompress(base64.b64decode(buffer))
+            return json.loads(decompressed.decode('utf-8'))
+        except:
+            # 兼容旧数据
+            return json.loads(base64.b64decode(buffer).decode('utf-8'))
+    except Exception as e:
+        logging.error(f"读取消息失败: {e}")
+        return None
 
+
+def send_with_length(sock, data_bytes):
+    try:
+        length = len(data_bytes)
+        sock.sendall(length.to_bytes(4, byteorder='big'))
+        sock.sendall(data_bytes)
+    except Exception as e:
+        logging.error(f"发送数据失败: {e}")
+        raise
 
 def handle_client(client_socket):
     """客户端处理线程"""
     global clients
     verified = False
-    while True:
-        try:
+    try:
+        while True:
             data = read_message(client_socket)
-            raw_message = read_message(client_socket)
-            if not raw_message:
+            if not data:
                 break
-            decoded = base64.b64decode(raw_message).decode('utf-8')
-            data = json.loads(decoded)
             if not verified:
                 if data.get("command") == "verify":
-                    if data.get("payload") == "cat-message-v1.5":
+                    if data.get("payload") == "cat-message-v1.6":
                         response = {"type": "verify", "status": "ok"}
                         send_to_client(json.dumps(response), client_socket)
                         verified = True
@@ -114,26 +111,42 @@ def handle_client(client_socket):
                 end = len(MESSAGE_LOG) - page*page_size
                 send_chat_history(client_socket, start, end)
                 continue
-            
             # 存储消息时记录类型
             msg_data = {
                 "username": data["username"],
                 "message": data["message"],
                 "ip": client_socket.getpeername()[0],
                 "time": data.get("time", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                "content_type": data.get("content_type", "text")  # 新增类型字段
+                "content_type": data.get("content_type", "text")
             }
             broadcast(msg_data, client_socket)
-            
-        except Exception as e:
-            break
+    except Exception as e:
+        logging.error(f"handle_client异常: {e}")
+    finally:
+        if client_socket in clients:
+            clients.remove(client_socket)
+        try:
+            client_socket.close()
+        except Exception:
+            pass
+        broadcast_online_users()
 
 def broadcast_online_users():
     global clients
     count = len(clients)
     message = json.dumps({"type": "online_users", "count": count})
-    for client in clients:
-        send_to_client(message, client)
+    # 复制clients列表，避免遍历时修改
+    for client in clients[:]:
+        try:
+            send_to_client(message, client)
+        except Exception as e:
+            logging.error(f"发送在线人数失败: {e}")
+            if client in clients:
+                clients.remove(client)
+            try:
+                client.close()
+            except Exception:
+                pass
 
 def save_message_to_file(username, message, ip, time):
     global MESSAGE_LOG
@@ -143,47 +156,61 @@ def save_message_to_file(username, message, ip, time):
 
 def broadcast(data, client_socket):
     """广播消息并存储"""
-    global MESSAGE_LOG
-    # 存储到历史记录
+    global MESSAGE_LOG, clients
     MESSAGE_LOG.append(data)
-    # 广播给其他客户端
     message = json.dumps(data)
-    for client in clients:
+    for client in clients[:]:
         if client != client_socket:
             try:
-                compressed = zlib.compress(message.encode('utf-8'))  # 压缩
+                compressed = zlib.compress(message.encode('utf-8'))
                 encrypted = base64.b64encode(compressed)
-                client.sendall(encrypted)
+                send_with_length(client, encrypted)
             except Exception as e:
                 logging.error(f"广播失败: {e}")
-    # 保存到文件
+                if client in clients:
+                    clients.remove(client)
+                try:
+                    client.close()
+                except Exception:
+                    pass
     with open("chat.json", "w") as f:
         json.dump(MESSAGE_LOG, f, ensure_ascii=False, indent=4)
 
 def send_to_client(message, client_socket):
     try:
-        encrypted = base64.b64encode(message.encode('utf-8'))
-        client_socket.sendall(encrypted)
+        compressed = zlib.compress(message.encode('utf-8'))
+        encrypted = base64.b64encode(compressed)
+        send_with_length(client_socket, encrypted)
     except Exception as e:
         logging.error(f"Error sending message to client: {e}")
         if client_socket in clients:
             clients.remove(client_socket)
-        client_socket.close()
+        try:
+            client_socket.close()
+        except Exception:
+            pass
 
 def send_chat_history(client_socket, start, end):
     """分页发送历史记录"""
-    try:
-        for msg in MESSAGE_LOG[start:end]:
+    for msg in MESSAGE_LOG[start:end]:
+        try:
             history_payload = {
                 "type": "history",
-                "data": [msg]  # 每次发送一条
+                "data": [msg]
             }
             json_data = json.dumps(history_payload).encode('utf-8')
-            compressed = zlib.compress(json_data)  # 压缩数据
+            compressed = zlib.compress(json_data)
             encrypted = base64.b64encode(compressed)
-            client_socket.sendall(encrypted)
-    except Exception as e:
-        logging.error(f"发送历史失败: {e}")
+            send_with_length(client_socket, encrypted)
+        except Exception as e:
+            logging.error(f"发送历史失败: {e}")
+            if client_socket in clients:
+                clients.remove(client_socket)
+            try:
+                client_socket.close()
+            except Exception:
+                pass
+            break
 
 def get_latest_github_release(REPO):
     try:
@@ -236,6 +263,27 @@ def start_server():
                 break
             elif cmd == "check_update":
                 check_for_update()
+            elif cmd == "help":
+                print('''
+                    ####################################################################
+                    cat-message-server-v1.6
+                    https://github.com/xhdndmm/cat-message      
+                    你可以输入stop来停止服务器
+                    You can enter stop to stop the server
+                    你可以输入clear_history来清除聊天记录
+                    You can enter clear_history to clear chat history   
+                    你可以输入check_update来检查更新
+                    You can enter check_update to check for updates   
+                    服务器日志：./server.log      
+                    Server log: ./server.log
+                    聊天记录：./chat.json
+                    Chat log: ./chat.json
+                    配置文件：./config.ini
+                    Config file：./config.ini
+                    请确保你的服务器已经开启12345端口（或者其他端口）
+                    Please make sure your server has opened port 12345 (or other ports)
+                    ####################################################################
+                    ''')
             else:
                 print("无效命令")
 
@@ -246,10 +294,17 @@ def start_server():
             try:
                 client_socket, addr = server.accept()
                 logging.info(f"Connection from {addr} established")
+                # 检查socket是否有效
+                try:
+                    client_socket.settimeout(2)
+                    test = client_socket.recv(1, socket.MSG_PEEK)
+                    client_socket.settimeout(None)
+                except Exception:
+                    client_socket.close()
+                    continue
                 clients.append(client_socket)
                 threading.Thread(target=handle_client, args=(client_socket,), daemon=True).start()
             except socket.timeout:
-                # 超时后继续循环，避免阻塞
                 continue
             except socket.error as e:
                 logging.error(f"Socket error: {e}")
