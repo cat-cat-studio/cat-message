@@ -17,32 +17,40 @@ REPO = "xhdndmm/cat-message"
 CURRENT_VERSION = "v1.6" 
 
 def send_message_with_length(sock, data_bytes):
-    # 发送4字节大端长度+数据体
-    length = len(data_bytes)
-    sock.sendall(length.to_bytes(4, byteorder='big'))
-    sock.sendall(data_bytes)
+    try:
+        length = len(data_bytes)
+        sock.sendall(length.to_bytes(4, byteorder='big'))
+        sock.sendall(data_bytes)
+    except Exception as e:
+        QMessageBox.warning(None, "发送失败", f"发送数据失败: {str(e)}")
 
 def read_message(sock):
     """读取网络消息并自动解压（带长度头）"""
-    raw_length = sock.recv(4)
-    if not raw_length:
-        return None
-    msg_length = int.from_bytes(raw_length, byteorder='big')
-    buffer = bytearray()
-    while len(buffer) < msg_length:
-        chunk = sock.recv(min(4096, msg_length - len(buffer)))
-        if not chunk:
-            break
-        buffer.extend(chunk)
     try:
-        decompressed = zlib.decompress(base64.b64decode(buffer))
-        return decompressed
-    except:
-        return base64.b64decode(buffer)
+        raw_length = sock.recv(4)
+        if not raw_length:
+            return None
+        msg_length = int.from_bytes(raw_length, byteorder='big')
+        buffer = bytearray()
+        while len(buffer) < msg_length:
+            chunk = sock.recv(min(4096, msg_length - len(buffer)))
+            if not chunk:
+                break
+            buffer.extend(chunk)
+        try:
+            decompressed = zlib.decompress(base64.b64decode(buffer))
+            return decompressed
+        except Exception as e:
+            QMessageBox.warning(None, "接收失败", f"解压缩失败: {str(e)}")
+            return base64.b64decode(buffer)
+    except Exception as e:
+        QMessageBox.warning(None, "接收失败", f"读取消息失败: {str(e)}")
+        return None
 
 class ChatReceiver(QThread):
     """消息接收线程，处理网络通信"""
-    new_message = pyqtSignal(str, str)
+    # 修改信号，带上图片数据
+    new_message = pyqtSignal(str, str, object)  # text, msg_type, img_data
     update_online_users = pyqtSignal(int)
     
     def __init__(self, client_socket):
@@ -57,7 +65,6 @@ class ChatReceiver(QThread):
                 if not raw_data:
                     break
                 data = json.loads(raw_data.decode('utf-8'))
-                
                 # 处理历史消息
                 if data.get("type") == "history":
                     for msg in data["data"]:
@@ -75,16 +82,13 @@ class ChatReceiver(QThread):
         """统一处理消息并发射信号"""
         msg_type = data.get("content_type", "text")
         if msg_type == "image":
-            # 图片消息特殊处理
             text = f"{data['username']} ({data.get('time', 'unknown')}) [图片]:"
-            self.new_message.emit(text, data["message"])
+            self.new_message.emit(text, "image", data["message"])
         else:
-            # 文本消息
             text = f"{data['username']} ({data.get('time', 'unknown')}, {data.get('ip', 'unknown')}): {data['message']}"
-            self.new_message.emit(text, "text")
+            self.new_message.emit(text, "text", None)
 
     def stop(self):
-        """停止线程"""
         self.running = False
         self.quit()
         self.wait()
@@ -186,8 +190,8 @@ class MainWindow(QMainWindow):
             "time": current_time,
             "content_type": "image"
         }
-        self._send_payload(payload)
-        self._append_message(f"You ({current_time}) [图片]:", "image", img_data)
+        self.send_payload(payload)
+        self.append_message(f"You ({current_time}) [图片]:", "image", img_data)
 
     #连接服务器
     def connect_to_server(self):
@@ -215,23 +219,19 @@ class MainWindow(QMainWindow):
             self.client_socket.settimeout(None)
             if not response_data:
                 raise Exception("未收到验证响应")
-            decompressed_resp = zlib.decompress(base64.b64decode(response_data)).decode('utf-8')
+            decompressed_resp = response_data.decode('utf-8')
             resp = json.loads(decompressed_resp)
             if not (resp.get("type") == "verify" and resp.get("status") == "ok"):
                 QMessageBox.warning(self, "验证失败", f"服务器验证失败: {resp.get('message', '未知错误')}")
-                self.client_socket.close()
-                self.client_socket = None
-                self.server_ip_edit.setDisabled(False)
-                self.username_edit.setDisabled(False)
-                self.connect_btn.setDisabled(False)
+                self.disconnect_from_server()
                 return
         except socket.timeout:
+            self.disconnect_from_server()
             QMessageBox.warning(self, "连接超时", "无法连接到服务器，请检查网络或服务器地址")
-            self.client_socket = None
             return
         except Exception as e:
-            QMessageBox.warning(self, "连接失败", f"连接服务器时发生错误: {str(e)}")
-            self.client_socket = None
+            self.disconnect_from_server()
+            QMessageBox.critical(self, "连接失败", f"连接服务器时发生错误:\n{repr(e)}")
             return
         self.server_ip_edit.setDisabled(True)
         self.username_edit.setDisabled(True)
@@ -254,8 +254,8 @@ class MainWindow(QMainWindow):
             "time": current_time,
             "content_type": "text"
         }
-        self._send_payload(payload)
-        self._append_message(f"You ({current_time}): {message}", "text")
+        self.send_payload(payload)
+        self.append_message(f"You ({current_time}): {message}", "text")
         self.message_edit.clear()
 
     def send_payload(self, payload):
@@ -271,19 +271,17 @@ class MainWindow(QMainWindow):
     def append_message(self, text, msg_type, img_data=None):
         """向聊天框添加消息"""
         if msg_type == "image":
-            # 插入图片
             cursor = self.chat_area.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
-            
-            # 插入文本
-            cursor.insertText(text + "\n")
-            
+            # 插入文本并换行
+            cursor.insertText(text)
+            cursor.insertBlock()  # 强制换行
             # 插入图片
             image_format = QTextImageFormat()
             image_format.setWidth(200)  # 限制图片宽度
             image_format.setName(f"data:image/png;base64,{img_data}")
             cursor.insertImage(image_format)
-            cursor.insertText("\n")
+            cursor.insertBlock()  # 图片后再换行
         else:
             self.chat_area.append(text)
         
@@ -295,17 +293,19 @@ class MainWindow(QMainWindow):
         try:
             payload = {"command": "load_history"}
             json_payload = json.dumps(payload).encode('utf-8')
-            encrypted = base64.b64encode(json_payload)
+            compressed = zlib.compress(json_payload)
+            encrypted = base64.b64encode(compressed)
             send_message_with_length(self.client_socket, encrypted)
         except Exception as e:
             QMessageBox.warning(self, "加载错误", "加载聊天记录失败")
 
     def update_chat(self, text, msg_type="text", img_data=None):
+        # 统一处理图片和文本
         if msg_type == "image" and img_data:
             self.append_message(text, "image", img_data)
         else:
-            self.chat_area.append(text)
-        
+            self.append_message(text, "text")
+
     def update_online_users(self, count):
         self.online_users_label.setText(f"在线人数: {count}")
         
@@ -321,7 +321,9 @@ class MainWindow(QMainWindow):
                 pass
             self.client_socket = None
         if self.receiver_thread:
-            self.receiver_thread.stop()
+            self.receiver_thread.running = False  # 确保线程能退出
+            self.receiver_thread.quit()
+            self.receiver_thread.wait(2000)  # 最多等2秒，防止卡死
             self.receiver_thread = None
         self.server_ip_edit.setDisabled(False)
         self.username_edit.setDisabled(False)
@@ -329,7 +331,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已断开与服务器的连接。")
         
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.6</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.6</a><br><a href="https://docs.cat-message.xhdndmm.cn">使用文档</a>')
         
     def closeEvent(self, event):
         if self.client_socket:

@@ -55,17 +55,22 @@ def read_message(sock):
         while len(buffer) < msg_length:
             chunk = sock.recv(min(4096, msg_length - len(buffer)))
             if not chunk:
-                break
+                # 连接中断，直接返回None
+                return None
             buffer.extend(chunk)
         try:
-            # 先解base64再解压
-            decompressed = zlib.decompress(base64.b64decode(buffer))
+            # 确保buffer长度是4的倍数，否则base64解码会出错
+            if len(buffer) % 4 != 0:
+                logging.error("base64数据长度不是4的倍数")
+                return None
+            decoded_data = base64.b64decode(buffer)
+            decompressed = zlib.decompress(decoded_data)
             return json.loads(decompressed.decode('utf-8'))
-        except:
-            # 兼容旧数据
-            return json.loads(base64.b64decode(buffer).decode('utf-8'))
+        except Exception as e:
+            logging.error(f"解码消息失败: {e}", exc_info=True)
+            return None
     except Exception as e:
-        logging.error(f"读取消息失败: {e}")
+        logging.error(f"读取消息失败: {e}", exc_info=True)
         return None
 
 
@@ -80,6 +85,8 @@ def send_with_length(sock, data_bytes):
 
 def handle_client(client_socket):
     """客户端处理线程"""
+    addr = client_socket.getpeername()
+    logging.info(f"Verifying client from {addr}")
     global clients
     verified = False
     try:
@@ -90,8 +97,10 @@ def handle_client(client_socket):
             if not verified:
                 if data.get("command") == "verify":
                     if data.get("payload") == "cat-message-v1.6":
-                        response = {"type": "verify", "status": "ok"}
-                        send_to_client(json.dumps(response), client_socket)
+                        response_data = json.dumps({"type": "verify", "status": "ok"}).encode('utf-8')
+                        compressed = zlib.compress(response_data)
+                        encrypted = base64.b64encode(compressed)
+                        send_with_length(client_socket, encrypted)
                         verified = True
                         broadcast_online_users()
                         continue
@@ -121,7 +130,7 @@ def handle_client(client_socket):
             }
             broadcast(msg_data, client_socket)
     except Exception as e:
-        logging.error(f"handle_client异常: {e}")
+        logging.error(f"handle_client异常: {e}", exc_info=True)
     finally:
         if client_socket in clients:
             clients.remove(client_socket)
@@ -320,4 +329,4 @@ def start_server():
         logging.info("Server shut down gracefully")
 
 if __name__ == "__main__":
-    start_server()
+  start_server()
