@@ -273,9 +273,10 @@ class MainWindow(QMainWindow):
         if msg_type == "image":
             cursor = self.chat_area.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
-            # 插入文本并换行
+            # 插入文本并换行（确保文本和图片之间有空行）
+            cursor.insertBlock()
             cursor.insertText(text)
-            cursor.insertBlock()  # 强制换行
+            cursor.insertBlock()
             # 插入图片
             image_format = QTextImageFormat()
             image_format.setWidth(200)  # 限制图片宽度
