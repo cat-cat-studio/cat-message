@@ -2,7 +2,7 @@
 #server.py
 #https://github.com/xhdndmm/cat-message
 
-print("cat-message-server-v1.6")
+print("cat-message-server-v1.8")
 
 import socket
 import threading
@@ -41,7 +41,7 @@ if not os.path.exists(config_file):
         logging.info("Create config file")
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.6"
+CURRENT_VERSION = "v1.8"
 
 # 创建图片存储目录
 IMAGE_STORAGE_DIR = "image_storage"
@@ -165,7 +165,7 @@ def handle_client(client_socket):
                     if data.get("command") == "verify":
                         payload = data.get("payload", "")
                         
-                        if payload == "cat-message-v1.6-noenc":
+                        if payload == "cat-message-v1.8-noenc":
                             # 无加密模式
                             is_encrypted = False
                             response_data = {
@@ -179,7 +179,7 @@ def handle_client(client_socket):
                             broadcast_online_users()
                             continue
                             
-                        elif payload.startswith("cat-message-v1.6-enc-"):
+                        elif payload.startswith("cat-message-v1.8-enc-"):
                             # 加密模式
                             key_size = int(payload.split("-")[-1])
                             is_encrypted = True
@@ -493,7 +493,7 @@ def start_server():
             elif cmd == "help":
                 print('''
                     ####################################################################
-                    cat-message-server-v1.6
+                    cat-message-server-v1.8
                     https://github.com/xhdndmm/cat-message      
                     你可以输入stop来停止服务器
                     You can enter stop to stop the server
