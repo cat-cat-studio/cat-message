@@ -1,4 +1,4 @@
-# Cat-Message v1.6 - 加密聊天工具
+# Cat-Message v1.8 - 加密聊天工具
 
 ## 新功能
 

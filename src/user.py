@@ -16,7 +16,7 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.6" 
+CURRENT_VERSION = "v1.8" 
 
 class RSACrypto:
     def __init__(self):
@@ -212,7 +212,7 @@ class ConnectThread(QThread):
             # 根据加密模式处理
             if self.encryption_mode == "无加密":
                 # 发送兼容性验证
-                verify_payload = {"command": "verify", "payload": "cat-message-v1.6-noenc"}
+                verify_payload = {"command": "verify", "payload": "cat-message-v1.8-noenc"}
                 send_message_with_length(client_socket, json.dumps(verify_payload).encode('utf-8'))
                 
                 response = read_message(client_socket)
@@ -232,7 +232,7 @@ class ConnectThread(QThread):
                 crypto.generate_key_pair(key_size)
                 
                 # 发送验证信息
-                verify_payload = {"command": "verify", "payload": f"cat-message-v1.6-enc-{key_size}"}
+                verify_payload = {"command": "verify", "payload": f"cat-message-v1.8-enc-{key_size}"}
                 send_message_with_length(client_socket, json.dumps(verify_payload).encode('utf-8'))
                 
                 # 等待服务器响应
@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已断开与服务器的连接。")
         
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.6</a><br><a href="https://docs.cat-message.xhdndmm.cn">使用文档</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.8</a><br><a href="https://docs.cat-message.xhdndmm.cn">使用文档</a>')
         
     def closeEvent(self, event):
         if self.client_socket:
