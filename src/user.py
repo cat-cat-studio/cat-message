@@ -9,8 +9,8 @@ import base64
 import zlib
 from datetime import datetime
 from PyQt6.QtWidgets import  QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox, QFileDialog, QComboBox
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QTextCursor, QImage, QTextImageFormat
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QUrl, QMimeData
+from PyQt6.QtGui import QAction, QTextCursor, QImage, QTextImageFormat, QDrag
 import requests
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
@@ -113,6 +113,9 @@ class ChatReceiver(QThread):
                 # 处理在线人数
                 elif data.get("type") == "online_users":
                     self.update_online_users.emit(data["count"])
+                # 处理错误消息
+                elif data.get("type") == "error":
+                    QMessageBox.warning(None, "服务器错误", data.get("message", "未知错误"))
                 # 处理普通消息
                 else:
                     self.process_message(data)
@@ -133,6 +136,46 @@ class ChatReceiver(QThread):
                     QMessageBox.warning(None, "获取图片失败", f"无法获取图片，状态码: {response.status_code}")
             except Exception as e:
                 QMessageBox.warning(None, "获取图片失败", f"无法获取图片: {str(e)}")
+        elif msg_type == "file":
+            file_name = data.get("file_name", "未知文件")
+            file_size = data.get("file_size", 0)
+            text = f"{data['username']} ({data.get('time', 'unknown')}) [文件: {file_name}]:"
+            
+            # 下载文件到本地临时目录
+            try:
+                response = requests.get(f"http://{self.client_socket.getpeername()[0]}:12346/file/{data['message']}")
+                if response.status_code == 200:
+                    # 创建临时目录
+                    import tempfile
+                    import os
+                    temp_dir = tempfile.gettempdir()
+                    local_file_path = os.path.join(temp_dir, "cat_message_files", file_name)
+                    
+                    # 确保目录存在
+                    os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+                    
+                    # 保存文件
+                    with open(local_file_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    self.new_message.emit(text, "file", {
+                        "name": file_name, 
+                        "size": file_size, 
+                        "local_path": local_file_path
+                    })
+                else:
+                    # 下载失败，显示错误信息
+                    self.new_message.emit(text, "file", {
+                        "name": file_name, 
+                        "size": file_size, 
+                        "error": "下载失败"
+                    })
+            except Exception as e:
+                self.new_message.emit(text, "file", {
+                    "name": file_name, 
+                    "size": file_size, 
+                    "error": str(e)
+                })
         else:
             text = f"{data['username']} ({data.get('time', 'unknown')}, {data.get('ip', 'unknown')}): {data['message']}"
             self.new_message.emit(text, "text", None)
@@ -230,6 +273,7 @@ class MainWindow(QMainWindow):
         self.client_socket = None
         self.receiver_thread = None
         self.crypto = None
+        self.file_paths = {}
 
     def init_ui(self):
         """初始化界面"""
@@ -263,6 +307,11 @@ class MainWindow(QMainWindow):
         # 聊天区域
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
+        self.chat_area.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_area.customContextMenuRequested.connect(self.show_context_menu)
+        self.chat_area.mouseDoubleClickEvent = self.on_chat_area_double_click
+        self.chat_area.mousePressEvent = self.on_chat_area_mouse_press
+        self.chat_area.mouseMoveEvent = self.on_chat_area_mouse_move
         
         # 功能按钮区域
         h_func = QHBoxLayout()
@@ -272,9 +321,12 @@ class MainWindow(QMainWindow):
         self.disconnect_btn.clicked.connect(self.disconnect_from_server)
         self.btn_upload = QPushButton("发送图片")
         self.btn_upload.clicked.connect(self.send_image)
+        self.btn_send_file = QPushButton("发送文件")
+        self.btn_send_file.clicked.connect(self.send_file)
         h_func.addWidget(self.load_history_btn)
         h_func.addWidget(self.disconnect_btn)
         h_func.addWidget(self.btn_upload)
+        h_func.addWidget(self.btn_send_file)
         
         # 消息输入区域
         h_msg = QHBoxLayout()
@@ -300,6 +352,10 @@ class MainWindow(QMainWindow):
         check_update_action = QAction("检查更新", self)
         check_update_action.triggered.connect(MainWindow.check_for_update)
         toolbar.addAction(check_update_action)
+        # 清理缓存按钮
+        clear_cache_action = QAction("清理缓存", self)
+        clear_cache_action.triggered.connect(self.clear_file_cache)
+        toolbar.addAction(clear_cache_action)
         # 关于按钮
         about_action = QAction("关于", self)
         about_action.triggered.connect(self.show_about)
@@ -307,6 +363,35 @@ class MainWindow(QMainWindow):
         # 在线人数显示
         self.online_users_label = QLabel("在线: 0")
         toolbar.addWidget(self.online_users_label)
+
+    def send_file(self):
+        """发送文件处理"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择文件", "", "All Files (*.*)")
+        if not file_path:
+            return
+        
+        import os
+        file_size = os.path.getsize(file_path)
+        
+        # 读取文件数据
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+        
+        # 获取文件名
+        file_name = os.path.basename(file_path)
+        
+        # 构建消息
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        payload = {
+            "username": self.username_edit.text().strip(),
+            "message": base64.b64encode(file_data).decode('utf-8'),
+            "time": current_time,
+            "content_type": "file",
+            "file_name": file_name,
+            "file_size": file_size
+        }
+        self.send_payload(payload)
+        self.append_message(f"You ({current_time}) [文件: {file_name}]:", "file", {"name": file_name, "size": file_size})
 
     def send_image(self):
         """发送图片处理"""
@@ -407,7 +492,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "错误", "发送失败")
 
-    def append_message(self, text, msg_type, img_data=None):
+    def append_message(self, text, msg_type, data=None):
         """向聊天框添加消息"""
         if msg_type == "image":
             cursor = self.chat_area.textCursor()
@@ -417,12 +502,58 @@ class MainWindow(QMainWindow):
             cursor.insertBlock()
             image_format = QTextImageFormat()
             image_format.setWidth(200)
-            image_format.setName(f"data:image/png;base64,{base64.b64encode(img_data).decode('utf-8')}")
+            image_format.setName(f"data:image/png;base64,{base64.b64encode(data).decode('utf-8')}")
             cursor.insertImage(image_format)
+            cursor.insertBlock()
+        elif msg_type == "file":
+            cursor = self.chat_area.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertBlock()
+            cursor.insertText(text)
+            cursor.insertBlock()
+            
+            if data:
+                if "local_path" in data:
+                    # 文件已下载到本地
+                    file_info = f"📁 {data['name']} ({self.format_file_size(data['size'])})"
+                    cursor.insertText(file_info)
+                    cursor.insertBlock()
+                    cursor.insertText("✅ 文件已下载到本地，到文件管理器")
+                    cursor.insertBlock()
+                    
+                    # 保存文件路径
+                    import os
+                    file_folder = os.path.dirname(data["local_path"])
+                    # 存储文件信息以便拖拽
+                    file_id = len(self.file_paths)
+                    self.file_paths[file_id] = {
+                        'path': data["local_path"],
+                        'name': data["name"],
+                        'folder': file_folder
+                    }
+                    
+                    cursor.insertText(f"📂 双击打开文件夹: {file_folder}")
+                    
+                elif "error" in data:
+                    # 显示错误信息
+                    cursor.insertText(f"📁 {data['name']} ({self.format_file_size(data['size'])}) - ❌ {data['error']}")
+                else:
+                    # 自己发送的文件
+                    file_info = f"📁 {data['name']} ({self.format_file_size(data['size'])})"
+                    cursor.insertText(file_info)
             cursor.insertBlock()
         else:
             self.chat_area.append(text)
         
+    def format_file_size(self, size):
+        """格式化文件大小显示"""
+        if size < 1024:
+            return f"{size} B"
+        elif size < 1024 * 1024:
+            return f"{size // 1024} KB"
+        else:
+            return f"{size // (1024 * 1024)} MB"
+
     def load_history(self):
         if not self.client_socket:
             QMessageBox.warning(self, "警告", "尚未连接服务器")
@@ -438,9 +569,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "加载错误", "加载聊天记录失败")
 
-    def update_chat(self, text, msg_type="text", img_data=None):
-        if msg_type == "image" and img_data:
-            self.append_message(text, "image", img_data)
+    def update_chat(self, text, msg_type="text", data=None):
+        if msg_type == "image" and data:
+            self.append_message(text, "image", data)
+        elif msg_type == "file" and data:
+            self.append_message(text, "file", data)
         else:
             self.append_message(text, "text")
 
@@ -505,6 +638,180 @@ class MainWindow(QMainWindow):
             QMessageBox.information(None, "检查更新", "当前已是最新版本")
         else:
             QMessageBox.information(None, "检查更新", f"发现新版本: {latest_version}\n注意：不要随便升级，本项目需要确认服务端版本和客户端版本是否一致！")
+
+    def show_context_menu(self, pos):
+        """显示右键菜单"""
+        cursor = self.chat_area.cursorForPosition(pos)
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        selected_text = cursor.selectedText()
+        
+        # 检查是否点击在文件路径行
+        if "📂 双击打开文件夹:" in selected_text:
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self.chat_area)
+            
+            open_folder_action = menu.addAction("📂 打开文件夹")
+            copy_path_action = menu.addAction("📋 复制路径")
+            
+            action = menu.exec(self.chat_area.mapToGlobal(pos))
+            
+            if action == open_folder_action:
+                path = selected_text.replace("📂 双击打开文件夹: ", "").strip()
+                self.open_file_folder(path)
+            elif action == copy_path_action:
+                path = selected_text.replace("📂 双击打开文件夹: ", "").strip()
+                QApplication.clipboard().setText(path)
+                
+    def on_chat_area_double_click(self, event):
+        """处理聊天区域双击事件"""
+        cursor = self.chat_area.cursorForPosition(event.pos())
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        selected_text = cursor.selectedText()
+        
+        # 如果双击的是文件夹路径行，打开文件夹
+        if "📂 双击打开文件夹:" in selected_text:
+            path = selected_text.replace("📂 双击打开文件夹: ", "").strip()
+            self.open_file_folder(path)
+            
+    def open_file_folder(self, folder_path):
+        """打开文件所在的文件夹"""
+        import os
+        import platform
+        import subprocess
+        
+        if not os.path.exists(folder_path):
+            QMessageBox.warning(self, "错误", "文件夹不存在")
+            return
+            
+        try:
+            if platform.system() == "Windows":
+                os.startfile(folder_path)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.run(["open", folder_path])
+            else:  # Linux
+                subprocess.run(["xdg-open", folder_path])
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开文件夹: {str(e)}")
+
+    def on_chat_area_mouse_press(self, event):
+        """处理聊天区域鼠标按下事件"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_position = event.pos()
+        # 调用原始的鼠标按下事件
+        QTextEdit.mousePressEvent(self.chat_area, event)
+        
+    def on_chat_area_mouse_move(self, event):
+        """处理聊天区域鼠标移动事件"""
+        import os
+        
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            QTextEdit.mouseMoveEvent(self.chat_area, event)
+            return
+            
+        if not hasattr(self, 'drag_start_position'):
+            QTextEdit.mouseMoveEvent(self.chat_area, event)
+            return
+            
+        if ((event.pos() - self.drag_start_position).manhattanLength() < 
+            QApplication.startDragDistance()):
+            QTextEdit.mouseMoveEvent(self.chat_area, event)
+            return
+            
+        # 检查当前位置是否有文件
+        cursor = self.chat_area.cursorForPosition(event.pos())
+        cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+        selected_text = cursor.selectedText()
+        
+        file_path = None
+        if "📁" in selected_text and "(" in selected_text:
+            # 这是一个文件行，查找对应的路径
+            cursor.movePosition(QTextCursor.MoveOperation.Down)
+            cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+            next_line = cursor.selectedText()
+            
+            if "📂 双击打开文件夹:" in next_line:
+                # 找到文件夹路径，推算文件路径
+                folder_path = next_line.replace("📂 双击打开文件夹: ", "").strip()
+                # 从存储的文件路径中查找匹配的文件
+                for file_info in self.file_paths.values():
+                    if file_info['folder'] == folder_path:
+                        file_path = file_info['path']
+                        break
+        
+        if file_path and os.path.exists(file_path):
+            # 开始拖拽
+            drag = QDrag(self.chat_area)
+            mime_data = QMimeData()
+            
+            # 设置文件URL
+            file_url = QUrl.fromLocalFile(file_path)
+            mime_data.setUrls([file_url])
+            
+            # 执行拖拽
+            drop_action = drag.exec(Qt.DropAction.CopyAction)
+        else:
+            # 调用原始的鼠标移动事件
+            QTextEdit.mouseMoveEvent(self.chat_area, event)
+
+    def clear_file_cache(self):
+        """清理文件缓存"""
+        import os
+        import tempfile
+        import shutil
+        
+        # 获取缓存目录路径
+        temp_dir = tempfile.gettempdir()
+        cache_dir = os.path.join(temp_dir, "cat_message_files")
+        
+        if not os.path.exists(cache_dir):
+            QMessageBox.information(self, "清理缓存", "没有找到缓存文件，无需清理。")
+            return
+        
+        # 确认对话框
+        reply = QMessageBox.question(
+            self, 
+            "确认清理", 
+            f"确定要清理所有缓存文件吗？\n\n缓存位置：{cache_dir}\n\n清理后将删除所有已下载的文件，此操作不可撤销。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # 获取文件数量和总大小
+                file_count = 0
+                total_size = 0
+                for root, dirs, files in os.walk(cache_dir):
+                    file_count += len(files)
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            total_size += os.path.getsize(file_path)
+                        except OSError:
+                            pass
+                
+                # 删除缓存目录
+                shutil.rmtree(cache_dir)
+                
+                # 清理本地文件路径记录
+                self.file_paths.clear()
+                
+                # 格式化大小显示
+                if total_size < 1024:
+                    size_str = f"{total_size} B"
+                elif total_size < 1024 * 1024:
+                    size_str = f"{total_size // 1024} KB"
+                else:
+                    size_str = f"{total_size // (1024 * 1024)} MB"
+                
+                QMessageBox.information(
+                    self, 
+                    "清理完成", 
+                    f"缓存清理完成！\n\n已删除 {file_count} 个文件\n释放空间：{size_str}"
+                )
+                
+            except Exception as e:
+                QMessageBox.warning(self, "清理失败", f"清理缓存时出错：{str(e)}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

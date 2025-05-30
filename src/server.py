@@ -32,6 +32,10 @@ if not os.path.exists(config_file):
     config['database'] = {
         'port': '12345'
     }
+    config['file_settings'] = {
+        'max_file_size_mb': '0',  # 0表示无限制，其他数字表示MB
+        'enable_file_limit': 'false'
+    }
     with open(config_file, 'w') as f:
         config.write(f)
         logging.info("Create config file")
@@ -43,6 +47,11 @@ CURRENT_VERSION = "v1.6"
 IMAGE_STORAGE_DIR = "image_storage"
 if not os.path.exists(IMAGE_STORAGE_DIR):
     os.makedirs(IMAGE_STORAGE_DIR)
+
+# 创建文件存储目录
+FILE_STORAGE_DIR = "file_storage"
+if not os.path.exists(FILE_STORAGE_DIR):
+    os.makedirs(FILE_STORAGE_DIR)
 
 if os.path.exists("chat.json"):
     try:
@@ -71,6 +80,42 @@ def get_image(image_id):
         return None
     with open(file_path, 'rb') as f:
         return f.read()
+
+def save_file(file_data, file_name):
+    """保存文件并返回UUID"""
+    file_id = str(uuid.uuid4())
+    file_path = os.path.join(FILE_STORAGE_DIR, file_id)
+    with open(file_path, 'wb') as f:
+        f.write(file_data)
+    
+    # 保存文件元数据
+    metadata_path = os.path.join(FILE_STORAGE_DIR, f"{file_id}.meta")
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump({"original_name": file_name}, f)
+    
+    return file_id
+
+def get_file(file_id):
+    """获取文件数据"""
+    file_path = os.path.join(FILE_STORAGE_DIR, file_id)
+    if not os.path.exists(file_path):
+        return None, None
+    
+    with open(file_path, 'rb') as f:
+        file_data = f.read()
+    
+    # 获取原始文件名
+    metadata_path = os.path.join(FILE_STORAGE_DIR, f"{file_id}.meta")
+    original_name = "unknown_file"
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+                original_name = metadata.get("original_name", "unknown_file")
+        except:
+            pass
+    
+    return file_data, original_name
 
 # 读取消息
 def read_message(sock):
@@ -204,6 +249,32 @@ def handle_client(client_socket):
                     image_data = base64.b64decode(data["message"])
                     image_id = save_image(image_data)
                     data["message"] = image_id
+                
+                # 处理文件消息
+                elif data.get("content_type") == "file":
+                    # 检查文件大小限制
+                    enable_limit = config.getboolean('file_settings', 'enable_file_limit', fallback=False)
+                    if enable_limit:
+                        max_size_mb = config.getint('file_settings', 'max_file_size_mb', fallback=10)
+                        file_size = data.get("file_size", 0)
+                        if max_size_mb > 0 and file_size > max_size_mb * 1024 * 1024:
+                            # 发送错误消息给客户端
+                            error_msg = {
+                                "type": "error",
+                                "message": f"文件大小超过限制({max_size_mb}MB)"
+                            }
+                            if client_keys[client_socket].get('encrypted'):
+                                cipher = PKCS1_OAEP.new(client_keys[client_socket]['peer_public_key'])
+                                encrypted_data = cipher.encrypt(json.dumps(error_msg).encode('utf-8'))
+                                send_with_length(client_socket, encrypted_data)
+                            else:
+                                send_with_length(client_socket, json.dumps(error_msg).encode('utf-8'))
+                            continue
+                    
+                    file_data = base64.b64decode(data["message"])
+                    file_name = data.get("file_name", "unknown_file")
+                    file_id = save_file(file_data, file_name)
+                    data["message"] = file_id
                 
                 # 广播消息给其他客户端
                 for client in clients[:]:
@@ -364,6 +435,18 @@ class ImageRequestHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_response(404)
                 self.end_headers()
+        elif self.path.startswith('/file/'):
+            file_id = self.path[6:]  # 移除 '/file/' 前缀
+            file_data, original_name = get_file(file_id)
+            if file_data:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/octet-stream')
+                self.send_header('Content-Disposition', f'attachment; filename="{original_name}"')
+                self.end_headers()
+                self.wfile.write(file_data)
+            else:
+                self.send_response(404)
+                self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
@@ -424,8 +507,12 @@ def start_server():
                     Chat log: ./chat.json
                     配置文件：./config.ini
                     Config file：./config.ini
-                    请确保你的服务器已经开启12345端口（或者其他端口）和12346端口（图片服务）
-                    Please make sure your server has opened port 12345 (or other ports) and port 12346 (image service)
+                    图片存储：./image_storage/
+                    Image storage: ./image_storage/
+                    文件存储：./file_storage/
+                    File storage: ./file_storage/
+                    请确保你的服务器已经开启12345端口（聊天服务）和12346端口（图片和文件服务）
+                    Please make sure your server has opened port 12345 (chat service) and port 12346 (image and file service)
                     ####################################################################
                     ''')
             else:
