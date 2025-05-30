@@ -37,6 +37,36 @@ if [ ! -f "src/server.py" ]; then
     exit 1
 fi
 
+# 检查并创建完整的config.ini文件
+echo "正在检查配置文件..."
+if [ ! -f "config.ini" ]; then
+    echo "创建默认config.ini文件..."
+    cat > config.ini << 'CONFIGEOF'
+[server]
+port = 12345
+
+[file_settings]
+enable_file_limit = false
+max_file_size_mb = 100
+CONFIGEOF
+else
+    # 检查config.ini是否包含必要的sections
+    if ! grep -q "\[server\]" config.ini; then
+        echo "更新config.ini文件，添加[server]部分..."
+        echo "" >> config.ini
+        echo "[server]" >> config.ini
+        echo "port = 12345" >> config.ini
+    fi
+    
+    if ! grep -q "\[file_settings\]" config.ini; then
+        echo "更新config.ini文件，添加[file_settings]部分..."
+        echo "" >> config.ini
+        echo "[file_settings]" >> config.ini
+        echo "enable_file_limit = false" >> config.ini
+        echo "max_file_size_mb = 100" >> config.ini
+    fi
+fi
+
 echo "开始构建服务器..."
 
 # 创建Linux专用的spec文件
