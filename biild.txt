@@ -1,0 +1,5 @@
+# 打包服务器（控制台程序）
+pyinstaller --onefile --console --name "cat-message-server-v1.8" src/server.py
+
+# 打包客户端（窗口程序）
+pyinstaller --onefile --windowed --name "cat-message-client-v1.8" src/user.py
