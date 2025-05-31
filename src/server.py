@@ -3,6 +3,7 @@
 #https://github.com/xhdndmm/cat-message
 
 print("cat-message-server-v1.8")
+print("正在导入模块...")
 
 import socket
 import threading
@@ -16,10 +17,66 @@ import configparser
 import zlib
 import uuid
 from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Cipher import PKCS1_OAEP, AES
+from Crypto.Random import get_random_bytes
+from Crypto.Util.Padding import pad, unpad
 import http.server
 import socketserver
 import threading
+import time
+
+print("模块导入完成")
+
+# RSA密钥缓存系统
+class RSAKeyCache:
+    def __init__(self):
+        self.cache = {2048: [], 4096: [], 8192: []}
+        self.max_cache_size = 3  # 每种密钥类型最多缓存3个
+        self.generating = set()  # 正在生成的密钥大小
+        
+    def get_key_pair(self, key_size):
+        """获取密钥对，如果缓存中没有则生成新的"""
+        if self.cache[key_size]:
+            return self.cache[key_size].pop()
+        else:
+            # 缓存中没有，直接生成
+            return self._generate_key_pair(key_size)
+            
+    def _generate_key_pair(self, key_size):
+        """生成新的密钥对"""
+        start_time = time.time()
+        key = RSA.generate(key_size)
+        end_time = time.time()
+        logging.info(f"RSA{key_size} 密钥生成耗时 {end_time - start_time:.2f} 秒")
+        return {
+            'key': key,
+            'public_key': key.publickey(),
+            'private_key': key
+        }
+        
+    def pregenerate_keys(self):
+        """在后台预生成一些密钥"""
+        def generate_worker():
+            for key_size in [2048, 4096]:  # 预生成常用的密钥大小
+                while len(self.cache[key_size]) < self.max_cache_size:
+                    if key_size not in self.generating:
+                        self.generating.add(key_size)
+                        try:
+                            key_pair = self._generate_key_pair(key_size)
+                            self.cache[key_size].append(key_pair)
+                            logging.info(f"预生成RSA{key_size}密钥完成，缓存数量: {len(self.cache[key_size])}")
+                        except Exception as e:
+                            logging.error(f"预生成RSA{key_size}密钥失败: {e}")
+                        finally:
+                            self.generating.discard(key_size)
+                    time.sleep(1)  # 避免CPU占用过高
+                        
+        # 启动后台生成线程
+        thread = threading.Thread(target=generate_worker, daemon=True)
+        thread.start()
+
+# 创建全局密钥缓存
+rsa_cache = RSAKeyCache()
 
 logging.basicConfig(filename='server.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,7 +86,7 @@ config.read(config_file)
 
 if not os.path.exists(config_file):
     config = configparser.ConfigParser()
-    config['database'] = {
+    config['server'] = {
         'port': '12345'
     }
     config['file_settings'] = {
@@ -184,38 +241,51 @@ def handle_client(client_socket):
                             key_size = int(payload.split("-")[-1])
                             is_encrypted = True
                             
-                            # 生成RSA密钥对
-                            key = RSA.generate(key_size)
-                            public_key = key.publickey()
-                            private_key = key
-                            
-                            # 存储密钥
-                            client_keys[client_socket] = {
-                                'public_key': public_key,
-                                'private_key': private_key,
-                                'encrypted': True
-                            }
-                            
-                            # 发送公钥给客户端
-                            response_data = {
-                                "type": "verify",
-                                "status": "ok",
-                                "public_key": base64.b64encode(public_key.export_key()).decode('utf-8')
-                            }
-                            send_with_length(client_socket, json.dumps(response_data).encode('utf-8'))
-                            
-                            # 等待接收客户端公钥
-                            key_data = read_message(client_socket)
-                            if key_data:
-                                key_data = json.loads(key_data.decode('utf-8'))
-                                if key_data.get("type") == "public_key":
-                                    client_keys[client_socket]['peer_public_key'] = RSA.import_key(
-                                        base64.b64decode(key_data["public_key"])
-                                    )
-                                    verified = True
-                                    clients.append(client_socket)
-                                    broadcast_online_users()
-                                    continue
+                            try:
+                                # 生成RSA密钥对（这可能耗时较长，特别是4096和8192位）
+                                logging.info(f"正在为客户端 {addr} 获取 {key_size} 位RSA密钥...")
+                                
+                                # 从缓存获取或生成新的密钥对
+                                key_pair = rsa_cache.get_key_pair(key_size)
+                                
+                                # 存储密钥
+                                client_keys[client_socket] = {
+                                    'public_key': key_pair['public_key'],
+                                    'private_key': key_pair['private_key'],
+                                    'encrypted': True
+                                }
+                                
+                                # 发送公钥给客户端
+                                response_data = {
+                                    "type": "verify",
+                                    "status": "ok",
+                                    "public_key": base64.b64encode(key_pair['public_key'].export_key()).decode('utf-8')
+                                }
+                                send_with_length(client_socket, json.dumps(response_data).encode('utf-8'))
+                                
+                                # 等待接收客户端公钥
+                                key_data = read_message(client_socket)
+                                if key_data:
+                                    key_data = json.loads(key_data.decode('utf-8'))
+                                    if key_data.get("type") == "public_key":
+                                        client_keys[client_socket]['peer_public_key'] = RSA.import_key(
+                                            base64.b64decode(key_data["public_key"])
+                                        )
+                                        verified = True
+                                        clients.append(client_socket)
+                                        broadcast_online_users()
+                                        logging.info(f"客户端 {addr} RSA{key_size} 加密验证成功")
+                                        continue
+                                        
+                            except Exception as e:
+                                logging.error(f"RSA密钥处理失败: {e}")
+                                response = {
+                                    "type": "verify", 
+                                    "status": "fail", 
+                                    "message": f"服务器密钥处理失败: {str(e)}"
+                                }
+                                send_with_length(client_socket, json.dumps(response).encode('utf-8'))
+                                break
                         else:
                             response = {"type": "verify", "status": "fail", "message": "验证失败: 无效的验证信息"}
                             send_with_length(client_socket, json.dumps(response).encode('utf-8'))
@@ -231,9 +301,8 @@ def handle_client(client_socket):
             # 处理已验证的消息
             try:
                 if is_encrypted and client_socket in client_keys and client_keys[client_socket].get('encrypted'):
-                    # 解密消息
-                    cipher = PKCS1_OAEP.new(client_keys[client_socket]['private_key'])
-                    decrypted_data = cipher.decrypt(data)
+                    # 使用混合解密消息
+                    decrypted_data = hybrid_decrypt(data, client_keys[client_socket]['private_key'])
                     data = json.loads(decrypted_data.decode('utf-8'))
                 else:
                     # 无加密模式，直接解析
@@ -264,8 +333,7 @@ def handle_client(client_socket):
                                 "message": f"文件大小超过限制({max_size_mb}MB)"
                             }
                             if client_keys[client_socket].get('encrypted'):
-                                cipher = PKCS1_OAEP.new(client_keys[client_socket]['peer_public_key'])
-                                encrypted_data = cipher.encrypt(json.dumps(error_msg).encode('utf-8'))
+                                encrypted_data = hybrid_encrypt(json.dumps(error_msg).encode('utf-8'), client_keys[client_socket]['peer_public_key'])
                                 send_with_length(client_socket, encrypted_data)
                             else:
                                 send_with_length(client_socket, json.dumps(error_msg).encode('utf-8'))
@@ -281,8 +349,7 @@ def handle_client(client_socket):
                     if client != client_socket and client in client_keys:
                         try:
                             if client_keys[client].get('encrypted'):
-                                cipher = PKCS1_OAEP.new(client_keys[client]['peer_public_key'])
-                                encrypted_data = cipher.encrypt(json.dumps(data).encode('utf-8'))
+                                encrypted_data = hybrid_encrypt(json.dumps(data).encode('utf-8'), client_keys[client]['peer_public_key'])
                                 send_with_length(client, encrypted_data)
                             else:
                                 send_with_length(client, json.dumps(data).encode('utf-8'))
@@ -324,8 +391,7 @@ def broadcast_online_users():
         try:
             if client in client_keys:
                 if client_keys[client].get('encrypted'):
-                    cipher = PKCS1_OAEP.new(client_keys[client]['peer_public_key'])
-                    encrypted_data = cipher.encrypt(message.encode('utf-8'))
+                    encrypted_data = hybrid_encrypt(message.encode('utf-8'), client_keys[client]['peer_public_key'])
                     send_with_length(client, encrypted_data)
                 else:
                     send_with_length(client, message.encode('utf-8'))
@@ -387,8 +453,7 @@ def send_chat_history_to_client(client_socket):
             }
             
             if client_socket in client_keys and client_keys[client_socket].get('encrypted'):
-                cipher = PKCS1_OAEP.new(client_keys[client_socket]['peer_public_key'])
-                encrypted_data = cipher.encrypt(json.dumps(history_payload).encode('utf-8'))
+                encrypted_data = hybrid_encrypt(json.dumps(history_payload).encode('utf-8'), client_keys[client_socket]['peer_public_key'])
                 send_with_length(client_socket, encrypted_data)
             else:
                 send_with_length(client_socket, json.dumps(history_payload).encode('utf-8'))
@@ -453,17 +518,56 @@ class ImageRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 def start_image_server():
     """启动图片服务器"""
-    handler = ImageRequestHandler
-    httpd = socketserver.TCPServer(("", 12346), handler)  # 使用不同端口避免冲突
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        handler = ImageRequestHandler
+        httpd = socketserver.TCPServer(("", 12346), handler)  # 使用不同端口避免冲突
+        
+        # 添加成功启动日志
+        logging.info("图片/文件服务器正在启动，端口: 12346")
+        print("图片/文件服务器正在启动，端口: 12346")
+        
+        # 启动服务器线程
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+        
+        # 验证服务器是否成功启动
+        logging.info("图片/文件服务器已启动成功")
+        print("✅ 图片/文件服务器已启动成功")
+        
+    except OSError as e:
+        if e.errno == 48 or "Address already in use" in str(e):
+            error_msg = "端口12346已被占用，请检查是否有其他程序使用此端口"
+            logging.error(error_msg)
+            print(f"❌ 错误: {error_msg}")
+        elif e.errno == 13 or "Permission denied" in str(e):
+            error_msg = "权限不足，无法绑定端口12346"
+            logging.error(error_msg)
+            print(f"❌ 错误: {error_msg}")
+        else:
+            error_msg = f"无法启动图片/文件服务器: {str(e)}"
+            logging.error(error_msg)
+            print(f"❌ 错误: {error_msg}")
+        
+        print("⚠️  图片和文件传输功能将不可用")
+        print("⚠️  请检查端口12346是否被占用或权限设置")
+        
+    except Exception as e:
+        error_msg = f"图片/文件服务器启动异常: {str(e)}"
+        logging.error(error_msg)
+        print(f"❌ 意外错误: {error_msg}")
+        print("⚠️  图片和文件传输功能将不可用")
 
 def start_server():
     # 启动图片服务器
     start_image_server()
     
+    # 启动RSA密钥预生成
+    logging.info("启动RSA密钥预生成...")
+    rsa_cache.pregenerate_keys()
+    
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    port = config.getint('database', 'port')
+    port = config.getint('server', 'port')
     server.bind(('0.0.0.0', port))
     server.listen(5)
     server.settimeout(5)
@@ -548,6 +652,84 @@ def start_server():
                 pass
         server.close()
         logging.info("Server shut down gracefully")
+
+def hybrid_encrypt(data, public_key):
+    """服务器端混合加密函数"""
+    try:
+        if not data:
+            raise Exception("加密数据为空")
+        
+        # 如果数据很小，直接使用RSA加密
+        if len(data) <= 400:
+            cipher = PKCS1_OAEP.new(public_key)
+            return cipher.encrypt(data)
+        
+        # 数据较大，使用混合加密
+        # 1. 生成随机AES密钥（256位）
+        aes_key = get_random_bytes(32)
+        
+        # 2. 使用AES加密数据
+        cipher_aes = AES.new(aes_key, AES.MODE_CBC)
+        padded_data = pad(data, AES.block_size)
+        encrypted_data = cipher_aes.encrypt(padded_data)
+        
+        # 3. 使用RSA加密AES密钥
+        cipher_rsa = PKCS1_OAEP.new(public_key)
+        encrypted_aes_key = cipher_rsa.encrypt(aes_key)
+        
+        # 4. 构造最终数据：标志 + RSA加密的AES密钥 + IV + AES加密的数据
+        result = b"HYBRID" + len(encrypted_aes_key).to_bytes(2, 'big') + encrypted_aes_key + cipher_aes.iv + encrypted_data
+        
+        return result
+        
+    except Exception as e:
+        raise Exception(f"服务器端混合加密失败: {str(e)}")
+
+def hybrid_decrypt(encrypted_data, private_key):
+    """服务器端混合解密函数"""
+    try:
+        if not encrypted_data:
+            raise Exception("解密数据为空")
+        
+        # 检查是否为混合加密数据
+        if not encrypted_data.startswith(b"HYBRID"):
+            # 不是混合加密，使用传统RSA解密
+            cipher = PKCS1_OAEP.new(private_key)
+            return cipher.decrypt(encrypted_data)
+        
+        # 是混合加密数据
+        offset = 6  # "HYBRID"长度
+        
+        # 读取RSA加密的AES密钥长度
+        aes_key_len = int.from_bytes(encrypted_data[offset:offset+2], 'big')
+        offset += 2
+        
+        # 读取RSA加密的AES密钥
+        encrypted_aes_key = encrypted_data[offset:offset+aes_key_len]
+        offset += aes_key_len
+        
+        # 读取IV（16字节）
+        iv = encrypted_data[offset:offset+16]
+        offset += 16
+        
+        # 读取AES加密的数据
+        aes_encrypted_data = encrypted_data[offset:]
+        
+        # 1. 使用RSA解密AES密钥
+        cipher_rsa = PKCS1_OAEP.new(private_key)
+        aes_key = cipher_rsa.decrypt(encrypted_aes_key)
+        
+        # 2. 使用AES密钥解密数据
+        cipher_aes = AES.new(aes_key, AES.MODE_CBC, iv)
+        padded_data = cipher_aes.decrypt(aes_encrypted_data)
+        
+        # 3. 去除填充
+        data = unpad(padded_data, AES.block_size)
+        
+        return data
+        
+    except Exception as e:
+        raise Exception(f"服务器端混合解密失败: {str(e)}")
 
 if __name__ == "__main__":
   start_server()
