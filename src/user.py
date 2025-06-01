@@ -8,8 +8,8 @@ import json
 import base64
 import zlib
 from datetime import datetime
-from PyQt6.QtWidgets import  QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox, QFileDialog, QComboBox, QToolButton, QMenu, QDialog
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QUrl, QMimeData
+from PyQt6.QtWidgets import  QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,QLineEdit, QPushButton, QTextEdit, QLabel, QMessageBox, QFileDialog, QComboBox, QToolButton, QMenu, QDialog, QProgressBar
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QUrl, QMimeData, QTimer
 from PyQt6.QtGui import QAction, QTextCursor, QImage, QTextImageFormat, QDrag
 import requests
 from Crypto.PublicKey import RSA
@@ -312,11 +312,12 @@ class ChatReceiver(QThread):
     update_online_users = pyqtSignal(int)
     connection_lost = pyqtSignal()  # 新增连接丢失信号
     
-    def __init__(self, client_socket, crypto):
+    def __init__(self, client_socket, crypto, main_window=None):
         super().__init__()
         self.client_socket = client_socket
         self.crypto = crypto  # 可能为None（无加密模式）
         self.running = True
+        self.main_window = main_window  # 引用主窗口以获取图片服务器配置
         
     def run(self):
         while self.running:
@@ -354,6 +355,33 @@ class ChatReceiver(QThread):
                 self.connection_lost.emit()
                 break
 
+    def get_image_server_url(self):
+        """获取图片服务器URL"""
+        if self.main_window:
+            # 优先使用用户设置的图片服务器地址
+            image_server = self.main_window.image_server_edit.text().strip()
+            image_port = self.main_window.image_port_edit.text().strip()
+            
+            if image_server:
+                # 用户指定了图片服务器地址
+                if not image_port.isdigit():
+                    image_port = "12346"  # 默认端口
+                return f"http://{image_server}:{image_port}"
+            else:
+                # 使用聊天服务器地址
+                chat_server = self.main_window.server_ip_edit.text().strip()
+                if chat_server:
+                    if not image_port.isdigit():
+                        image_port = "12346"  # 默认端口
+                    return f"http://{chat_server}:{image_port}"
+        
+        # 兜底方案：使用socket连接的对等地址
+        try:
+            server_ip = self.client_socket.getpeername()[0]
+            return f"http://{server_ip}:12346"
+        except:
+            return None
+
     def process_message(self, data):
         """统一处理消息并发射信号"""
         msg_type = data.get("content_type", "text")
@@ -361,28 +389,54 @@ class ChatReceiver(QThread):
             text = f"{data['username']} ({data.get('time', 'unknown')}) [图片]:"
             # 从服务器获取图片数据
             try:
-                server_ip = self.client_socket.getpeername()[0]
-                response = requests.get(f"http://{server_ip}:12346/image/{data['message']}", timeout=10)
+                base_url = self.get_image_server_url()
+                if not base_url:
+                    QMessageBox.warning(None, "获取图片失败", "无法确定图片服务器地址")
+                    return
+                    
+                image_url = f"{base_url}/image/{data['message']}"
+                
+                if self.main_window and self.main_window.debug_mode:
+                    self.main_window.update_chat(f"🔍 调试: 正在从 {image_url} 下载图片")
+                
+                response = requests.get(image_url, timeout=10)
                 if response.status_code == 200:
                     self.new_message.emit(text, "image", response.content)
+                    if self.main_window and self.main_window.debug_mode:
+                        self.main_window.update_chat(f"🔍 调试: 图片下载成功，大小: {len(response.content)} 字节")
                 else:
                     error_msg = f"无法获取图片，服务器返回状态码: {response.status_code}"
                     if response.status_code == 404:
                         error_msg += "\n图片可能已被删除或不存在"
                     elif response.status_code == 500:
                         error_msg += "\n服务器内部错误"
+                    
+                    # 添加调试信息
+                    if self.main_window and self.main_window.debug_mode:
+                        error_msg += f"\n\n🔍 调试信息:\n请求URL: {image_url}"
+                        
                     QMessageBox.warning(None, "获取图片失败", error_msg)
             except requests.exceptions.ConnectionError:
-                QMessageBox.warning(None, "获取图片失败", 
-                    "无法连接到图片服务器\n\n可能原因：\n"
-                    "1. 服务器端口12346未开放\n"
-                    "2. 图片/文件服务未正常启动\n"
-                    "3. 防火墙阻止了连接\n\n"
-                    "请联系服务器管理员检查端口12346的状态")
+                base_url = self.get_image_server_url()
+                error_msg = ("无法连接到图片服务器\n\n可能原因：\n"
+                    "1. 图片服务器地址或端口配置错误\n"
+                    "2. 服务器端口12346未开放\n"
+                    "3. 图片/文件服务未正常启动\n"
+                    "4. 防火墙阻止了连接\n\n"
+                    f"当前图片服务器地址: {base_url}\n\n"
+                    "解决方案：\n"
+                    "1. 检查'图片服务器'设置是否正确\n"
+                    "2. 联系服务器管理员确认端口12346状态\n"
+                    "3. 尝试在'图片服务器'字段填入正确的公网地址")
+                QMessageBox.warning(None, "获取图片失败", error_msg)
             except requests.exceptions.Timeout:
-                QMessageBox.warning(None, "获取图片失败", "连接超时，请检查网络连接")
+                QMessageBox.warning(None, "获取图片失败", "连接超时，请检查网络连接或图片服务器设置")
             except Exception as e:
-                QMessageBox.warning(None, "获取图片失败", f"获取图片时发生错误: {str(e)}")
+                error_msg = f"获取图片时发生错误: {str(e)}"
+                if self.main_window and self.main_window.debug_mode:
+                    base_url = self.get_image_server_url()
+                    error_msg += f"\n\n🔍 调试信息:\n图片服务器: {base_url}"
+                QMessageBox.warning(None, "获取图片失败", error_msg)
         elif msg_type == "file":
             file_name = data.get("file_name", "未知文件")
             file_size = data.get("file_size", 0)
@@ -390,8 +444,17 @@ class ChatReceiver(QThread):
             
             # 下载文件到本地临时目录
             try:
-                server_ip = self.client_socket.getpeername()[0]
-                response = requests.get(f"http://{server_ip}:12346/file/{data['message']}", timeout=30)
+                base_url = self.get_image_server_url()
+                if not base_url:
+                    self.new_message.emit(text, "file", {
+                        "name": file_name, 
+                        "size": file_size, 
+                        "error": "无法确定文件服务器地址"
+                    })
+                    return
+                    
+                file_url = f"{base_url}/file/{data['message']}"
+                response = requests.get(file_url, timeout=30)
                 if response.status_code == 200:
                     # 创建临时目录
                     import tempfile
@@ -428,7 +491,7 @@ class ChatReceiver(QThread):
                 self.new_message.emit(text, "file", {
                     "name": file_name, 
                     "size": file_size, 
-                    "error": "无法连接到文件服务器，请检查端口12346是否开放"
+                    "error": "无法连接到文件服务器，请检查图片服务器设置和端口12346是否开放"
                 })
             except requests.exceptions.Timeout:
                 self.new_message.emit(text, "file", {
@@ -761,6 +824,16 @@ class MainWindow(QMainWindow):
         self.connect_btn.clicked.connect(self.connect_to_server)
         h_conn.addWidget(self.connect_btn)
         
+        # 图片服务器设置区域
+        h_img_server = QHBoxLayout()
+        h_img_server.addWidget(QLabel("图片服务器:"))
+        self.image_server_edit = QLineEdit()
+        self.image_server_edit.setPlaceholderText("留空自动使用聊天服务器地址")
+        h_img_server.addWidget(self.image_server_edit)
+        h_img_server.addWidget(QLabel("端口:"))
+        self.image_port_edit = QLineEdit("12346")
+        h_img_server.addWidget(self.image_port_edit)
+        
         # 聊天区域
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
@@ -797,6 +870,7 @@ class MainWindow(QMainWindow):
         # 主布局
         v_layout = QVBoxLayout()
         v_layout.addLayout(h_conn)
+        v_layout.addLayout(h_img_server)  # 添加图片服务器设置行
         v_layout.addWidget(self.chat_area)
         v_layout.addLayout(h_func)
         v_layout.addLayout(h_msg)
@@ -886,33 +960,58 @@ class MainWindow(QMainWindow):
         
         import os
         file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
         
-        # 读取文件数据
+        # 检查文件是否存在和可读
         try:
             with open(file_path, "rb") as f:
-                file_data = f.read()
+                # 只读取一小部分来验证文件可读性
+                f.read(1024)
         except Exception as e:
             QMessageBox.warning(self, "文件错误", f"无法读取文件: {str(e)}")
             return
         
-        # 获取文件名
-        file_name = os.path.basename(file_path)
+        # 创建进度对话框
+        progress_dialog = FileSendProgressDialog(file_name, file_size, self)
         
-        # 构建消息
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        payload = {
-            "username": self.username_edit.text().strip(),
-            "message": base64.b64encode(file_data).decode('utf-8'),
-            "time": current_time,
-            "content_type": "file",
-            "file_name": file_name,
-            "file_size": file_size
-        }
+        # 创建发送线程
+        self.send_thread = FileSendThread(file_path, file_name, file_size, self)
         
-        if self.send_payload(payload):
+        # 连接信号 - 使用lambda包装来传递额外参数
+        self.send_thread.progress_updated.connect(
+            lambda percentage, status, bytes_processed, elapsed_time: 
+            progress_dialog.update_progress(percentage, status, bytes_processed, elapsed_time)
+        )
+        self.send_thread.send_completed.connect(
+            lambda success, error_msg: self.on_file_send_completed(success, error_msg, file_name, file_size, progress_dialog)
+        )
+        
+        # 连接取消信号
+        progress_dialog.finished.connect(lambda: self.send_thread.cancel() if hasattr(self, 'send_thread') else None)
+        
+        # 启动发送
+        self.send_thread.start()
+        
+        # 显示进度对话框
+        result = progress_dialog.exec()
+        
+        # 如果用户取消了对话框，停止发送线程
+        if result == QDialog.DialogCode.Rejected and hasattr(self, 'send_thread'):
+            self.send_thread.cancel()
+            self.send_thread.wait(1000)  # 等待最多1秒让线程停止
+            
+    def on_file_send_completed(self, success, error_msg, file_name, file_size, progress_dialog):
+        """文件发送完成回调"""
+        # 延迟关闭对话框，让用户看到"发送完成"状态
+        QTimer.singleShot(1000, progress_dialog.accept)
+        
+        if success:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.append_message(f"You ({current_time}) [文件: {file_name}]:", "file", {"name": file_name, "size": file_size})
+            if self.debug_mode:
+                self.update_chat(f"🔍 调试: 文件发送成功")
         else:
-            QMessageBox.warning(self, "发送失败", "文件发送失败，请检查网络连接")
+            QMessageBox.warning(self, "发送失败", error_msg)
 
     def send_image(self):
         """发送图片处理"""
@@ -925,71 +1024,84 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
         
-        # 读取图片数据
+        # 检查图片文件是否可读
         try:
             with open(file_path, "rb") as f:
-                img_data = f.read()
+                # 只读取一小部分来验证文件可读性
+                f.read(1024)
         except Exception as e:
             QMessageBox.warning(self, "图片错误", f"无法读取图片文件: {str(e)}")
             return
         
-        # 检查文件大小
-        file_size = len(img_data)
-        file_size_mb = file_size / (1024 * 1024)
-        file_size_kb = file_size / 1024
+        import os
+        file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
         
-        # 设置合理的文件大小限制
-        if file_size > 5000 * 1024 * 1024:  # 限制50MB
+        # 设置合理的文件大小限制检查
+        if file_size > 5000 * 1024 * 1024:  # 限制5000MB
+            file_size_mb = file_size / (1024 * 1024)
             QMessageBox.warning(self, "图片过大", 
                 f"图片文件过大 ({file_size_mb:.2f} MB)\n\n"
                 f"请选择小于5000MB的图片文件")
             return
         
+        # 显示调试信息
         if self.debug_mode:
             if file_size < 1024:
-                self.update_chat(f"🔍 调试: 正在发送图片，大小: {file_size} 字节")
+                self.update_chat(f"🔍 调试: 准备发送图片，大小: {file_size} 字节")
             elif file_size < 1024 * 1024:
-                self.update_chat(f"🔍 调试: 正在发送图片，大小: {file_size_kb:.1f} KB")
+                file_size_kb = file_size / 1024
+                self.update_chat(f"🔍 调试: 准备发送图片，大小: {file_size_kb:.1f} KB")
             else:
-                self.update_chat(f"🔍 调试: 正在发送图片，大小: {file_size_mb:.2f} MB")
+                file_size_mb = file_size / (1024 * 1024)
+                self.update_chat(f"🔍 调试: 准备发送图片，大小: {file_size_mb:.2f} MB")
         
-        # 构建消息
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 创建进度对话框
+        progress_dialog = FileSendProgressDialog(file_name, file_size, self)
+        progress_dialog.setWindowTitle("发送图片")
         
-        try:
-            payload = {
-                "username": self.username_edit.text().strip(),
-                "message": base64.b64encode(img_data).decode('utf-8'),
-                "time": current_time,
-                "content_type": "image"
-            }
-        except Exception as e:
-            QMessageBox.warning(self, "编码错误", f"图片数据编码失败: {str(e)}")
-            return
+        # 创建发送线程
+        self.image_send_thread = ImageSendThread(file_path, self)
         
-        if self.debug_mode:
-            self.update_chat(f"🔍 调试: 图片编码完成，准备发送...")
+        # 连接信号 - 使用lambda包装来传递额外参数
+        self.image_send_thread.progress_updated.connect(
+            lambda percentage, status, bytes_processed, elapsed_time: 
+            progress_dialog.update_progress(percentage, status, bytes_processed, elapsed_time)
+        )
+        self.image_send_thread.send_completed.connect(
+            lambda success, error_msg, img_data: self.on_image_send_completed(success, error_msg, img_data, progress_dialog)
+        )
         
-        try:
-            if self.send_payload(payload):
-                self.append_message(f"You ({current_time}) [图片]:", "image", img_data)
-                if self.debug_mode:
-                    self.update_chat(f"🔍 调试: 图片发送成功")
-                else:
-                    self.update_chat(f"✅ 图片发送成功")
-            else:
-                error_msg = "图片发送失败"
-                if self.crypto:
-                    error_msg += f"\n\n📊 图片信息：\n大小：{file_size} 字节"
-                    error_msg += "\n\n❌ RSA加密限制：\n图片太大，无法通过RSA加密发送"
-                    error_msg += "\n\n💡 解决方案：\n1. 断开连接并选择'无加密'模式\n2. 或选择更小的图片"
-                else:
-                    error_msg += "\n\n可能原因：\n1. 网络连接问题\n2. 服务器错误\n3. 图片格式问题"
-                QMessageBox.warning(self, "发送失败", error_msg)
-        except Exception as e:
-            QMessageBox.warning(self, "发送异常", f"发送图片时发生异常: {str(e)}")
+        # 连接取消信号
+        progress_dialog.finished.connect(lambda: self.image_send_thread.cancel() if hasattr(self, 'image_send_thread') else None)
+        
+        # 启动发送
+        self.image_send_thread.start()
+        
+        # 显示进度对话框
+        result = progress_dialog.exec()
+        
+        # 如果用户取消了对话框，停止发送线程
+        if result == QDialog.DialogCode.Rejected and hasattr(self, 'image_send_thread'):
+            self.image_send_thread.cancel()
+            self.image_send_thread.wait(1000)  # 等待最多1秒让线程停止
+            
+    def on_image_send_completed(self, success, error_msg, img_data, progress_dialog):
+        """图片发送完成回调"""
+        # 延迟关闭对话框，让用户看到"发送完成"状态
+        QTimer.singleShot(1000, progress_dialog.accept)
+        
+        if success:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.append_message(f"You ({current_time}) [图片]:", "image", img_data)
             if self.debug_mode:
-                self.update_chat(f"🔍 调试: 发送异常: {str(e)}")
+                self.update_chat(f"🔍 调试: 图片发送成功")
+            else:
+                self.update_chat(f"✅ 图片发送成功")
+        else:
+            QMessageBox.warning(self, "发送失败", error_msg)
+            if self.debug_mode:
+                self.update_chat(f"🔍 调试: 图片发送失败: {error_msg}")
 
     def connect_to_server(self):
         server_ip = self.server_ip_edit.text().strip()
@@ -1172,7 +1284,7 @@ class MainWindow(QMainWindow):
         self.update_chat(f"✅ 成功连接到服务器 ({encryption_info})")
         
         # 启动消息接收线程
-        self.receiver_thread = ChatReceiver(self.client_socket, self.crypto)
+        self.receiver_thread = ChatReceiver(self.client_socket, self.crypto, self)
         self.receiver_thread.new_message.connect(self.update_chat)
         self.receiver_thread.update_online_users.connect(self.update_online_users)
         self.receiver_thread.connection_lost.connect(self.on_connection_lost)
@@ -1415,6 +1527,16 @@ class MainWindow(QMainWindow):
         # 停止连接线程（如果正在运行）
         if hasattr(self, 'connect_thread') and self.connect_thread and self.connect_thread.isRunning():
             self.connect_thread.stop()
+            
+        # 停止文件发送线程
+        if hasattr(self, 'send_thread') and self.send_thread and self.send_thread.isRunning():
+            self.send_thread.cancel()
+            self.send_thread.wait(1000)
+            
+        # 停止图片发送线程
+        if hasattr(self, 'image_send_thread') and self.image_send_thread and self.image_send_thread.isRunning():
+            self.image_send_thread.cancel()
+            self.image_send_thread.wait(1000)
             
         # 关闭socket连接
         if self.client_socket:
@@ -1667,6 +1789,9 @@ class MainWindow(QMainWindow):
             self.server_port_edit.setDisabled(True)
             self.username_edit.setDisabled(True)
             self.encryption_mode_edit.setDisabled(True)
+            # 图片服务器设置在连接后仍可修改（用于公网部署调试）
+            self.image_server_edit.setDisabled(False)
+            self.image_port_edit.setDisabled(False)
             
             # 启用功能按钮
             self.send_btn.setDisabled(False)
@@ -1683,6 +1808,8 @@ class MainWindow(QMainWindow):
             self.server_port_edit.setDisabled(False)
             self.username_edit.setDisabled(False)
             self.encryption_mode_edit.setDisabled(False)
+            self.image_server_edit.setDisabled(False)
+            self.image_port_edit.setDisabled(False)
             
             # 禁用功能按钮
             self.send_btn.setDisabled(True)
@@ -1792,47 +1919,78 @@ class MainWindow(QMainWindow):
         
     def test_file_service_port(self, result_area):
         """测试文件服务端口12346"""
-        if not self.is_connection_ready():
-            result_area.append("❌ 请先连接到服务器")
+        # 获取图片服务器配置
+        image_server = self.image_server_edit.text().strip()
+        image_port = self.image_port_edit.text().strip()
+        
+        if image_server:
+            # 使用用户指定的图片服务器地址
+            server_ip = image_server
+            if not image_port.isdigit():
+                image_port = "12346"
+            port = int(image_port)
+        elif self.is_connection_ready():
+            # 使用聊天服务器地址
+            server_ip = self.server_ip_edit.text().strip()
+            if not image_port.isdigit():
+                image_port = "12346"
+            port = int(image_port)
+        else:
+            result_area.append("❌ 请先连接到服务器或配置图片服务器地址")
             return
             
         try:
-            server_ip = self.client_socket.getpeername()[0]
-            result_area.append(f"🔍 正在测试文件服务端口 {server_ip}:12346...")
+            result_area.append(f"🔍 正在测试文件服务端口 {server_ip}:{port}...")
             result_area.repaint()
             
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
-            result = sock.connect_ex((server_ip, 12346))
+            result = sock.connect_ex((server_ip, port))
             sock.close()
             
             if result == 0:
-                result_area.append("✅ 端口12346连接成功")
+                result_area.append(f"✅ 端口{port}连接成功")
             else:
-                result_area.append("❌ 端口12346连接失败")
+                result_area.append(f"❌ 端口{port}连接失败")
                 result_area.append("⚠️ 可能原因：")
                 result_area.append("   1. 服务器未启动文件服务")
-                result_area.append("   2. 防火墙阻止了端口12346")
+                result_area.append(f"   2. 防火墙阻止了端口{port}")
                 result_area.append("   3. 服务器配置问题")
+                result_area.append("   4. 图片服务器地址配置错误")
                 
         except Exception as e:
             result_area.append(f"❌ 端口测试异常: {str(e)}")
             
     def test_http_service(self, result_area):
         """测试HTTP文件服务"""
-        if not self.is_connection_ready():
-            result_area.append("❌ 请先连接到服务器")
+        # 获取图片服务器配置
+        image_server = self.image_server_edit.text().strip()
+        image_port = self.image_port_edit.text().strip()
+        
+        if image_server:
+            # 使用用户指定的图片服务器地址
+            server_ip = image_server
+            if not image_port.isdigit():
+                image_port = "12346"
+            base_url = f"http://{server_ip}:{image_port}"
+        elif self.is_connection_ready():
+            # 使用聊天服务器地址
+            server_ip = self.server_ip_edit.text().strip()
+            if not image_port.isdigit():
+                image_port = "12346"
+            base_url = f"http://{server_ip}:{image_port}"
+        else:
+            result_area.append("❌ 请先连接到服务器或配置图片服务器地址")
             return
             
         try:
-            server_ip = self.client_socket.getpeername()[0]
-            result_area.append(f"🔍 正在测试HTTP文件服务 {server_ip}:12346...")
+            result_area.append(f"🔍 正在测试HTTP文件服务 {base_url}...")
             result_area.repaint()
             
             import requests
             # 测试一个不存在的文件，应该返回404
-            test_url = f"http://{server_ip}:12346/file/test-non-exist"
+            test_url = f"{base_url}/file/test-non-exist"
             response = requests.get(test_url, timeout=10)
             
             if response.status_code == 404:
@@ -1845,8 +2003,10 @@ class MainWindow(QMainWindow):
             result_area.append("❌ 无法连接到HTTP文件服务")
             result_area.append("⚠️ 可能原因：")
             result_area.append("   1. 文件服务未启动")
-            result_area.append("   2. 端口12346被阻止")
+            result_area.append(f"   2. 端口{image_port}被阻止")
             result_area.append("   3. 服务器配置错误")
+            result_area.append("   4. 图片服务器地址配置错误")
+            result_area.append(f"\n当前测试地址: {base_url}")
         except requests.exceptions.Timeout:
             result_area.append("❌ HTTP服务连接超时")
         except Exception as e:
@@ -1889,6 +2049,437 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             result_area.append(f"❌ 发送测试图片异常: {str(e)}")
+
+class FileSendProgressDialog(QDialog):
+    """文件发送进度对话框"""
+    def __init__(self, file_name, file_size, parent=None):
+        super().__init__(parent)
+        self.file_name = file_name
+        self.file_size = file_size
+        self.cancelled = False
+        self.start_time = None
+        self.init_ui()
+        
+    def init_ui(self):
+        self.setWindowTitle("发送文件")
+        self.setFixedSize(450, 200)
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        
+        # 文件信息
+        info_label = QLabel(f"正在发送: {self.file_name}")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        size_label = QLabel(f"大小: {self.format_file_size(self.file_size)}")
+        layout.addWidget(size_label)
+        
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setFormat("%v% (%p%)")  # 显示百分比和值
+        layout.addWidget(self.progress_bar)
+        
+        # 详细进度信息
+        progress_info_layout = QHBoxLayout()
+        
+        # 传输速度
+        self.speed_label = QLabel("速度: 计算中...")
+        progress_info_layout.addWidget(self.speed_label)
+        
+        # 剩余时间
+        self.time_label = QLabel("剩余: 计算中...")
+        progress_info_layout.addWidget(self.time_label)
+        
+        layout.addLayout(progress_info_layout)
+        
+        # 状态标签
+        self.status_label = QLabel("准备发送...")
+        layout.addWidget(self.status_label)
+        
+        # 按钮
+        button_layout = QHBoxLayout()
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.clicked.connect(self.cancel_send)
+        button_layout.addWidget(self.cancel_btn)
+        layout.addLayout(button_layout)
+        
+    def format_file_size(self, size):
+        """格式化文件大小"""
+        if size < 1024:
+            return f"{size} B"
+        elif size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size / (1024 * 1024 * 1024):.1f} GB"
+            
+    def format_speed(self, bytes_per_second):
+        """格式化传输速度"""
+        if bytes_per_second < 1024:
+            return f"{bytes_per_second:.1f} B/s"
+        elif bytes_per_second < 1024 * 1024:
+            return f"{bytes_per_second / 1024:.1f} KB/s"
+        elif bytes_per_second < 1024 * 1024 * 1024:
+            return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
+        else:
+            return f"{bytes_per_second / (1024 * 1024 * 1024):.1f} GB/s"
+            
+    def format_time(self, seconds):
+        """格式化时间"""
+        if seconds < 60:
+            return f"{int(seconds)}秒"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}分{secs}秒"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            return f"{hours}时{minutes}分"
+            
+    def update_progress(self, percentage, status="", bytes_processed=0, elapsed_time=0):
+        """更新进度"""
+        import time
+        
+        if self.start_time is None:
+            self.start_time = time.time()
+            
+        self.progress_bar.setValue(int(percentage))
+        
+        if status:
+            self.status_label.setText(status)
+            
+        # 计算传输速度和剩余时间
+        if elapsed_time > 0 and bytes_processed > 0:
+            speed = bytes_processed / elapsed_time  # 字节/秒
+            self.speed_label.setText(f"速度: {self.format_speed(speed)}")
+            
+            # 计算剩余时间
+            if percentage > 0 and percentage < 100:
+                remaining_bytes = self.file_size - bytes_processed
+                if speed > 0:
+                    remaining_time = remaining_bytes / speed
+                    self.time_label.setText(f"剩余: {self.format_time(remaining_time)}")
+                else:
+                    self.time_label.setText("剩余: 计算中...")
+            elif percentage >= 100:
+                self.time_label.setText("剩余: 完成")
+        elif percentage >= 100:
+            self.speed_label.setText("速度: 完成")
+            self.time_label.setText("剩余: 完成")
+            
+    def cancel_send(self):
+        """取消发送"""
+        self.cancelled = True
+        self.reject()
+        
+    def closeEvent(self, event):
+        """关闭事件"""
+        self.cancelled = True
+        event.accept()
+
+class FileSendThread(QThread):
+    """文件发送线程"""
+    progress_updated = pyqtSignal(float, str, int, float)  # 进度百分比, 状态信息, 已处理字节数, 已用时间
+    send_completed = pyqtSignal(bool, str)  # 成功/失败, 错误信息
+    
+    def __init__(self, file_path, file_name, file_size, main_window):
+        super().__init__()
+        self.file_path = file_path
+        self.file_name = file_name
+        self.file_size = file_size
+        self.main_window = main_window
+        self.cancelled = False
+        
+    def cancel(self):
+        """取消发送"""
+        self.cancelled = True
+        
+    def run(self):
+        import time
+        
+        start_time = time.time()
+        
+        try:
+            # 阶段1: 读取文件 (0-30%)
+            self.progress_updated.emit(0, "正在读取文件...", 0, 0)
+            
+            if self.cancelled:
+                return
+                
+            # 分块读取文件以显示进度
+            chunk_size = 32 * 1024  # 32KB块，更小的块以提供更平滑的进度
+            file_data = bytearray()
+            
+            with open(self.file_path, "rb") as f:
+                bytes_read = 0
+                last_update_time = start_time
+                
+                while True:
+                    if self.cancelled:
+                        return
+                        
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                        
+                    file_data.extend(chunk)
+                    bytes_read += len(chunk)
+                    
+                    current_time = time.time()
+                    elapsed = current_time - start_time
+                    
+                    # 每100ms或每MB更新一次进度
+                    if (current_time - last_update_time) >= 0.1 or bytes_read % (1024 * 1024) == 0:
+                        read_progress = (bytes_read / self.file_size) * 30
+                        self.progress_updated.emit(
+                            read_progress, 
+                            f"读取中... ({self.format_bytes(bytes_read)}/{self.format_bytes(self.file_size)})",
+                            bytes_read,
+                            elapsed
+                        )
+                        last_update_time = current_time
+            
+            if self.cancelled:
+                return
+            
+            # 阶段2: Base64编码 (30-60%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(30, "正在编码文件...", bytes_read, elapsed)
+            
+            # 分块编码以显示进度和避免内存问题
+            encoded_chunks = []
+            total_chunks = (len(file_data) + chunk_size - 1) // chunk_size
+            encoded_bytes = 0
+            
+            for i in range(0, len(file_data), chunk_size):
+                if self.cancelled:
+                    return
+                    
+                chunk = file_data[i:i + chunk_size]
+                encoded_chunk = base64.b64encode(chunk).decode('utf-8')
+                encoded_chunks.append(encoded_chunk)
+                encoded_bytes += len(encoded_chunk)
+                
+                current_time = time.time()
+                elapsed = current_time - start_time
+                
+                # 编码进度 30-60%
+                encode_progress = 30 + ((i // chunk_size + 1) / total_chunks) * 30
+                self.progress_updated.emit(
+                    encode_progress, 
+                    f"编码中... ({i // chunk_size + 1}/{total_chunks} 块)",
+                    bytes_read + encoded_bytes // 4,  # 粗略估算编码对应的原始字节数
+                    elapsed
+                )
+                
+                # 短暂休眠避免CPU占用过高
+                self.msleep(1)
+            
+            if self.cancelled:
+                return
+                
+            encoded_data = ''.join(encoded_chunks)
+            
+            # 阶段3: 构建消息 (60-70%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(60, "构建消息...", bytes_read, elapsed)
+            
+            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            payload = {
+                "username": self.main_window.username_edit.text().strip(),
+                "message": encoded_data,
+                "time": current_datetime,
+                "content_type": "file",
+                "file_name": self.file_name,
+                "file_size": self.file_size
+            }
+            
+            if self.cancelled:
+                return
+            
+            # 阶段4: 发送数据 (70-100%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(70, "正在发送到服务器...", bytes_read, elapsed)
+            
+            success = self.main_window.send_payload(payload)
+            
+            if self.cancelled:
+                return
+            
+            final_time = time.time()
+            total_elapsed = final_time - start_time
+            
+            if success:
+                self.progress_updated.emit(100, "发送完成!", self.file_size, total_elapsed)
+                self.send_completed.emit(True, "")
+            else:
+                self.send_completed.emit(False, "发送失败，请检查网络连接")
+                
+        except Exception as e:
+            if not self.cancelled:
+                self.send_completed.emit(False, f"发送异常: {str(e)}")
+                
+    def format_bytes(self, size):
+        """格式化字节数显示"""
+        if size < 1024:
+            return f"{size} B"
+        elif size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size / (1024 * 1024 * 1024):.1f} GB"
+
+class ImageSendThread(QThread):
+    """图片发送线程"""
+    progress_updated = pyqtSignal(float, str, int, float)  # 进度百分比, 状态信息, 已处理字节数, 已用时间
+    send_completed = pyqtSignal(bool, str, object)  # 成功/失败, 错误信息, 图片数据
+    
+    def __init__(self, file_path, main_window):
+        super().__init__()
+        self.file_path = file_path
+        self.main_window = main_window
+        self.cancelled = False
+        
+    def cancel(self):
+        """取消发送"""
+        self.cancelled = True
+        
+    def run(self):
+        import time
+        import os
+        
+        start_time = time.time()
+        
+        try:
+            # 阶段1: 读取图片 (0-30%)
+            self.progress_updated.emit(0, "正在读取图片...", 0, 0)
+            
+            if self.cancelled:
+                return
+                
+            file_size = os.path.getsize(self.file_path)
+            
+            with open(self.file_path, "rb") as f:
+                img_data = f.read()
+            
+            if self.cancelled:
+                return
+            
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(30, "图片读取完成", file_size, elapsed)
+            
+            # 检查文件大小
+            file_size_mb = file_size / (1024 * 1024)
+            
+            if file_size > 5000 * 1024 * 1024:  # 限制5000MB
+                self.send_completed.emit(False, f"图片文件过大 ({file_size_mb:.2f} MB)，请选择小于5000MB的图片文件", None)
+                return
+            
+            # 阶段2: Base64编码 (30-70%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(30, "正在编码图片...", file_size, elapsed)
+            
+            try:
+                # 对于大图片，分块编码
+                if file_size > 1024 * 1024:  # 大于1MB的图片分块编码
+                    chunk_size = 64 * 1024  # 64KB块
+                    encoded_chunks = []
+                    total_chunks = (len(img_data) + chunk_size - 1) // chunk_size
+                    
+                    for i in range(0, len(img_data), chunk_size):
+                        if self.cancelled:
+                            return
+                            
+                        chunk = img_data[i:i + chunk_size]
+                        encoded_chunk = base64.b64encode(chunk).decode('utf-8')
+                        encoded_chunks.append(encoded_chunk)
+                        
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        # 编码进度 30-70%
+                        encode_progress = 30 + ((i // chunk_size + 1) / total_chunks) * 40
+                        self.progress_updated.emit(
+                            encode_progress, 
+                            f"编码中... ({i // chunk_size + 1}/{total_chunks} 块)",
+                            file_size,
+                            elapsed
+                        )
+                        
+                        # 短暂休眠避免CPU占用过高
+                        self.msleep(1)
+                    
+                    encoded_data = ''.join(encoded_chunks)
+                else:
+                    # 小图片直接编码
+                    encoded_data = base64.b64encode(img_data).decode('utf-8')
+                    current_time = time.time()
+                    elapsed = current_time - start_time
+                    self.progress_updated.emit(70, "编码完成", file_size, elapsed)
+                    
+            except Exception as e:
+                self.send_completed.emit(False, f"图片数据编码失败: {str(e)}", None)
+                return
+            
+            if self.cancelled:
+                return
+            
+            # 阶段3: 构建消息 (70-80%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(70, "构建消息...", file_size, elapsed)
+            
+            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            payload = {
+                "username": self.main_window.username_edit.text().strip(),
+                "message": encoded_data,
+                "time": current_datetime,
+                "content_type": "image"
+            }
+            
+            if self.cancelled:
+                return
+            
+            # 阶段4: 发送数据 (80-100%)
+            current_time = time.time()
+            elapsed = current_time - start_time
+            self.progress_updated.emit(80, "正在发送到服务器...", file_size, elapsed)
+            
+            success = self.main_window.send_payload(payload)
+            
+            if self.cancelled:
+                return
+            
+            final_time = time.time()
+            total_elapsed = final_time - start_time
+            
+            if success:
+                self.progress_updated.emit(100, "发送完成!", file_size, total_elapsed)
+                self.send_completed.emit(True, "", img_data)
+            else:
+                error_msg = "图片发送失败"
+                if self.main_window.crypto:
+                    error_msg += f"\n\n📊 图片信息：\n大小：{file_size} 字节"
+                    error_msg += "\n\n❌ RSA加密限制：\n图片太大，无法通过RSA加密发送"
+                    error_msg += "\n\n💡 解决方案：\n1. 断开连接并选择'无加密'模式\n2. 或选择更小的图片"
+                else:
+                    error_msg += "\n\n可能原因：\n1. 网络连接问题\n2. 服务器错误\n3. 图片格式问题"
+                self.send_completed.emit(False, error_msg, None)
+                
+        except Exception as e:
+            if not self.cancelled:
+                self.send_completed.emit(False, f"发送图片时发生异常: {str(e)}", None)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
