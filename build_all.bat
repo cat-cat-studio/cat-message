@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ====================================================================
-echo Cat Message v1.8 一体化编译脚本 (Windows)
+echo Cat Message v2.0 一体化编译脚本 (Windows)
 echo AES+RSA2048混合加密版本
 echo ====================================================================
 echo.
@@ -128,7 +128,7 @@ echo echo 正在启动 Cat Message 客户端... >> %WIN_DIR%\start_client.bat
 echo cat-message-client-win.exe >> %WIN_DIR%\start_client.bat
 
 :: 创建说明文件
-echo Cat Message v1.8 Windows版 > %WIN_DIR%\README_Windows.txt
+echo Cat Message v2.0 Windows版 > %WIN_DIR%\README_Windows.txt
 echo AES+RSA2048混合加密版本 >> %WIN_DIR%\README_Windows.txt
 echo. >> %WIN_DIR%\README_Windows.txt
 echo 使用说明： >> %WIN_DIR%\README_Windows.txt
@@ -179,7 +179,7 @@ echo.
 echo 📋 文件列表:
 dir /b %WIN_DIR%
 echo.
-echo ✨ 享受使用 Cat Message v1.8！
+echo ✨ 享受使用 Cat Message v2.0！
 echo ====================================================================
 pause
 exit /b 0
@@ -224,7 +224,7 @@ exit /b 0
 :create_linux_script
 echo #!/bin/bash > build_all_linux.sh
 echo echo "====================================================================" >> build_all_linux.sh
-echo echo "Cat Message v1.8 一体化编译脚本 (Linux)" >> build_all_linux.sh
+echo echo "Cat Message v2.0 一体化编译脚本 (Linux)" >> build_all_linux.sh
 echo echo "AES+RSA2048混合加密版本" >> build_all_linux.sh
 echo echo "====================================================================" >> build_all_linux.sh
 echo echo >> build_all_linux.sh

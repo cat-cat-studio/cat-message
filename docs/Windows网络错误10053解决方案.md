@@ -197,7 +197,7 @@ def handle_connection_abort(self):
 ---
 
 **最后更新**：2024年  
-**适用版本**：cat-message v1.8+  
+**适用版本**：cat-message v2.0+  
 **测试平台**：Windows 10/11
 
 如果按照本指南操作后问题仍未解决，请提供以下信息以便进一步诊断：
