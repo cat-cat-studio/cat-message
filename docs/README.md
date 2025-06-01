@@ -1,6 +1,6 @@
 # Cat-Message 文档中心
 
-欢迎使用 Cat-Message v1.8 文档中心！这里提供了详细的使用说明和配置指南。
+欢迎使用 Cat-Message v2.0 文档中心！这里提供了详细的使用说明和配置指南。
 
 ## 📚 文档索引
 
@@ -109,7 +109,7 @@ max_file_size_mb = 50
 
 ## 🔄 版本信息
 
-- **当前版本**：v1.8
+- **当前版本**：v2.0
 - **主要特性**：多级加密、文件分享、图片传输
 - **兼容性**：Windows, Linux, macOS
 - **依赖**：Python 3.7+, PyQt6, PyCryptodome

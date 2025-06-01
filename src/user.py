@@ -19,7 +19,7 @@ from Crypto.Util.Padding import pad, unpad
 import time
 
 REPO = "xhdndmm/cat-message"
-CURRENT_VERSION = "v1.8" 
+CURRENT_VERSION = "v2.0" 
 
 class RSACrypto:
     def __init__(self):
@@ -797,7 +797,7 @@ class ConnectThread(QThread):
                 if self.encryption_mode == "无加密":
                     try:
                         # 发送兼容性验证
-                        verify_payload = {"command": "verify", "payload": "cat-message-v1.8-noenc"}
+                        verify_payload = {"command": "verify", "payload": "cat-message-v2.0-noenc"}
                         send_message_with_length(client_socket, json.dumps(verify_payload).encode('utf-8'))
                         
                         response = read_message(client_socket)
@@ -855,7 +855,7 @@ class ConnectThread(QThread):
                         
                         # 发送验证信息（使用RSA2048标识以保持兼容性）
                         try:
-                            verify_payload = {"command": "verify", "payload": f"cat-message-v1.8-enc-{key_size}"}
+                            verify_payload = {"command": "verify", "payload": f"cat-message-v2.0-enc-{key_size}"}
                             send_message_with_length(client_socket, json.dumps(verify_payload).encode('utf-8'))
                         except Exception as e:
                             raise Exception(f"发送验证信息失败: {str(e)}")
@@ -1884,7 +1884,7 @@ class MainWindow(QMainWindow):
         self.update_chat("已手动断开与服务器的连接。")
 
     def show_about(self):
-        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v1.8</a><br><a href="https://docs.cat-message.xhdndmm.cn">使用文档</a>')
+        QMessageBox.information(self, "关于", '<a href="https://github.com/xhdndmm/cat-message">cat-message-user-v2.0</a><br><a href="https://docs.cat-message.xhdndmm.cn">使用文档</a>')
         
     def closeEvent(self, event):
         """程序关闭事件"""
@@ -3032,7 +3032,7 @@ class MainWindow(QMainWindow):
         export_data = {
             "export_info": {
                 "application": "Cat-Message",
-                "version": "v1.8",
+                "version": "v2.0",
                 "export_time": datetime.now().isoformat(),
                 "total_messages": len(messages)
             },
