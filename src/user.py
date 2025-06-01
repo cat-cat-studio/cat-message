@@ -2778,9 +2778,9 @@ class MainWindow(QMainWindow):
         
         dialog = QDialog(self)
         dialog.setWindowTitle("选择表情")
-        dialog.setFixedSize(300, 250)
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowFlag.WindowContextHelpButtonHint)
-        
+        dialog.setFixedSize(600, 500)
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+       
         layout = QGridLayout(dialog)
         
         # 常用表情包列表
