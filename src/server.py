@@ -122,6 +122,11 @@ else:
 clients = []
 client_keys = {}  # 存储客户端密钥
 
+# 房间管理数据结构
+rooms = {}  # 房间字典: {房间名: {"users": [客户端socket列表], "created_time": 创建时间}}
+client_rooms = {}  # 客户端房间映射: {客户端socket: 房间名}
+client_usernames = {}  # 客户端用户名映射: {客户端socket: 用户名}
+
 def save_image(image_data):
     """保存图片并返回UUID"""
     image_id = str(uuid.uuid4())
@@ -313,6 +318,46 @@ def handle_client(client_socket):
                     send_chat_history_to_client(client_socket)
                     continue
                 
+                # 处理心跳消息
+                elif data.get("command") == "heartbeat":
+                    # 发送心跳响应
+                    heartbeat_response = {
+                        "command": "heartbeat",
+                        "status": "ok",
+                        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    try:
+                        response_data = json.dumps(heartbeat_response).encode('utf-8')
+                        if client_keys[client_socket].get('encrypted'):
+                            encrypted_data = hybrid_encrypt(response_data, client_keys[client_socket]['peer_public_key'])
+                            send_with_length(client_socket, encrypted_data)
+                        else:
+                            send_with_length(client_socket, response_data)
+                    except Exception as e:
+                        logging.error(f"发送心跳响应失败: {e}")
+                    continue
+                
+                # 处理房间管理命令
+                elif data.get("command") == "create_room":
+                    handle_create_room(client_socket, data)
+                    continue
+                elif data.get("command") == "join_room":
+                    handle_join_room(client_socket, data)
+                    continue
+                elif data.get("command") == "leave_room":
+                    handle_leave_room(client_socket, data)
+                    continue
+                elif data.get("command") == "get_rooms":
+                    handle_get_rooms(client_socket)
+                    continue
+                elif data.get("command") == "get_users":
+                    handle_get_users(client_socket, data)
+                    continue
+                elif data.get("command") == "private_message":
+                    handle_private_message(client_socket, data)
+                    continue
+                
                 # 处理图片消息
                 if data.get("content_type") == "image":
                     image_data = base64.b64decode(data["message"])
@@ -345,22 +390,44 @@ def handle_client(client_socket):
                     data["message"] = file_id
                 
                 # 广播消息给其他客户端
+                sender_room = client_rooms.get(client_socket)
                 for client in clients[:]:
                     if client != client_socket and client in client_keys:
-                        try:
-                            if client_keys[client].get('encrypted'):
-                                encrypted_data = hybrid_encrypt(json.dumps(data).encode('utf-8'), client_keys[client]['peer_public_key'])
-                                send_with_length(client, encrypted_data)
-                            else:
-                                send_with_length(client, json.dumps(data).encode('utf-8'))
-                        except Exception as e:
-                            logging.error(f"广播消息失败: {e}")
-                            if client in clients:
-                                clients.remove(client)
+                        # 只向同一房间的用户广播消息
+                        if sender_room and client_rooms.get(client) == sender_room:
                             try:
-                                client.close()
-                            except Exception:
-                                pass
+                                if client_keys[client].get('encrypted'):
+                                    encrypted_data = hybrid_encrypt(json.dumps(data).encode('utf-8'), client_keys[client]['peer_public_key'])
+                                    send_with_length(client, encrypted_data)
+                                else:
+                                    send_with_length(client, json.dumps(data).encode('utf-8'))
+                            except Exception as e:
+                                logging.error(f"广播消息失败: {e}")
+                                remove_client_from_all_rooms(client)
+                                if client in clients:
+                                    clients.remove(client)
+                                try:
+                                    client.close()
+                                except Exception:
+                                    pass
+                        elif not sender_room:
+                            # 如果发送者不在任何房间，则向所有不在房间的用户广播
+                            if not client_rooms.get(client):
+                                try:
+                                    if client_keys[client].get('encrypted'):
+                                        encrypted_data = hybrid_encrypt(json.dumps(data).encode('utf-8'), client_keys[client]['peer_public_key'])
+                                        send_with_length(client, encrypted_data)
+                                    else:
+                                        send_with_length(client, json.dumps(data).encode('utf-8'))
+                                except Exception as e:
+                                    logging.error(f"广播消息失败: {e}")
+                                    remove_client_from_all_rooms(client)
+                                    if client in clients:
+                                        clients.remove(client)
+                                    try:
+                                        client.close()
+                                    except Exception:
+                                        pass
                 
                 # 存储消息
                 MESSAGE_LOG.append(data)
@@ -373,10 +440,14 @@ def handle_client(client_socket):
     except Exception as e:
         logging.error(f"handle_client异常: {e}", exc_info=True)
     finally:
+        # 清理客户端相关数据
+        remove_client_from_all_rooms(client_socket)
         if client_socket in clients:
             clients.remove(client_socket)
         if client_socket in client_keys:
             del client_keys[client_socket]
+        if client_socket in client_usernames:
+            del client_usernames[client_socket]
         try:
             client_socket.close()
         except Exception:
@@ -730,6 +801,289 @@ def hybrid_decrypt(encrypted_data, private_key):
         
     except Exception as e:
         raise Exception(f"服务器端混合解密失败: {str(e)}")
+
+def remove_client_from_all_rooms(client_socket):
+    """从所有房间中移除客户端"""
+    if client_socket in client_rooms:
+        room_name = client_rooms[client_socket]
+        if room_name in rooms and client_socket in rooms[room_name]["users"]:
+            rooms[room_name]["users"].remove(client_socket)
+            # 如果房间为空，删除房间
+            if not rooms[room_name]["users"]:
+                del rooms[room_name]
+                logging.info(f"房间 '{room_name}' 已删除（无用户）")
+            else:
+                # 通知房间内其他用户
+                broadcast_users_update(room_name)
+        del client_rooms[client_socket]
+
+def handle_create_room(client_socket, data):
+    """处理创建房间请求"""
+    room_name = data.get("room_name", "").strip()
+    username = data.get("username", "").strip()
+    
+    if not room_name:
+        send_room_response(client_socket, "create", False, "房间名称不能为空", "")
+        return
+    
+    if room_name in rooms:
+        send_room_response(client_socket, "create", False, "房间已存在", room_name)
+        return
+    
+    # 创建新房间
+    rooms[room_name] = {
+        "users": [client_socket],
+        "created_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    client_rooms[client_socket] = room_name
+    client_usernames[client_socket] = username
+    
+    send_room_response(client_socket, "create", True, "房间创建成功", room_name)
+    broadcast_rooms_update()
+    logging.info(f"用户 {username} 创建了房间 '{room_name}'")
+
+def handle_join_room(client_socket, data):
+    """处理加入房间请求"""
+    room_name = data.get("room_name", "").strip()
+    username = data.get("username", "").strip()
+    
+    if not room_name:
+        send_room_response(client_socket, "join", False, "房间名称不能为空", "")
+        return
+    
+    if room_name not in rooms:
+        send_room_response(client_socket, "join", False, "房间不存在", room_name)
+        return
+    
+    # 如果用户已在其他房间，先离开
+    if client_socket in client_rooms:
+        old_room = client_rooms[client_socket]
+        if old_room != room_name:
+            handle_leave_room_internal(client_socket)
+    
+    # 加入新房间
+    if client_socket not in rooms[room_name]["users"]:
+        rooms[room_name]["users"].append(client_socket)
+    client_rooms[client_socket] = room_name
+    client_usernames[client_socket] = username
+    
+    send_room_response(client_socket, "join", True, "成功加入房间", room_name)
+    broadcast_users_update(room_name)
+    broadcast_rooms_update()
+    logging.info(f"用户 {username} 加入了房间 '{room_name}'")
+
+def handle_leave_room(client_socket, data):
+    """处理离开房间请求"""
+    room_name = data.get("room_name", "").strip()
+    username = data.get("username", "").strip()
+    
+    if client_socket not in client_rooms:
+        send_room_response(client_socket, "leave", False, "您不在任何房间中", room_name)
+        return
+    
+    current_room = client_rooms[client_socket]
+    if room_name and current_room != room_name:
+        send_room_response(client_socket, "leave", False, "您不在指定房间中", room_name)
+        return
+    
+    handle_leave_room_internal(client_socket)
+    send_room_response(client_socket, "leave", True, "成功离开房间", current_room)
+    logging.info(f"用户 {username} 离开了房间 '{current_room}'")
+
+def handle_leave_room_internal(client_socket):
+    """内部离开房间处理"""
+    if client_socket in client_rooms:
+        room_name = client_rooms[client_socket]
+        if room_name in rooms and client_socket in rooms[room_name]["users"]:
+            rooms[room_name]["users"].remove(client_socket)
+            # 如果房间为空，删除房间
+            if not rooms[room_name]["users"]:
+                del rooms[room_name]
+                logging.info(f"房间 '{room_name}' 已删除（无用户）")
+            else:
+                # 通知房间内其他用户
+                broadcast_users_update(room_name)
+        del client_rooms[client_socket]
+        broadcast_rooms_update()
+
+def handle_get_rooms(client_socket):
+    """处理获取房间列表请求"""
+    rooms_data = []
+    for room_name, room_info in rooms.items():
+        rooms_data.append({
+            "name": room_name,
+            "user_count": len(room_info["users"]),
+            "created_time": room_info["created_time"]
+        })
+    
+    response = {
+        "command": "rooms_update",
+        "rooms": rooms_data
+    }
+    
+    try:
+        response_data = json.dumps(response).encode('utf-8')
+        if client_keys[client_socket].get('encrypted'):
+            encrypted_data = hybrid_encrypt(response_data, client_keys[client_socket]['peer_public_key'])
+            send_with_length(client_socket, encrypted_data)
+        else:
+            send_with_length(client_socket, response_data)
+    except Exception as e:
+        logging.error(f"发送房间列表失败: {e}")
+
+def handle_get_users(client_socket, data):
+    """处理获取用户列表请求"""
+    room_name = data.get("room_name", "")
+    
+    if not room_name or room_name not in rooms:
+        # 返回空用户列表
+        response = {
+            "command": "users_update",
+            "room_name": room_name,
+            "users": []
+        }
+    else:
+        users_data = []
+        for user_socket in rooms[room_name]["users"]:
+            username = client_usernames.get(user_socket, "未知用户")
+            users_data.append({
+                "username": username,
+                "status": "online"
+            })
+        
+        response = {
+            "command": "users_update",
+            "room_name": room_name,
+            "users": users_data
+        }
+    
+    try:
+        response_data = json.dumps(response).encode('utf-8')
+        if client_keys[client_socket].get('encrypted'):
+            encrypted_data = hybrid_encrypt(response_data, client_keys[client_socket]['peer_public_key'])
+            send_with_length(client_socket, encrypted_data)
+        else:
+            send_with_length(client_socket, response_data)
+    except Exception as e:
+        logging.error(f"发送用户列表失败: {e}")
+
+def handle_private_message(client_socket, data):
+    """处理私聊消息"""
+    target_username = data.get("target_username", "")
+    message = data.get("message", "")
+    from_username = data.get("username", "")
+    timestamp = data.get("time", "")
+    
+    if not target_username or not message:
+        return
+    
+    # 查找目标用户的socket
+    target_socket = None
+    for socket, username in client_usernames.items():
+        if username == target_username:
+            target_socket = socket
+            break
+    
+    if not target_socket or target_socket not in clients:
+        # 目标用户不在线，可以选择存储离线消息或直接忽略
+        return
+    
+    # 发送私聊消息给目标用户
+    private_msg = {
+        "command": "private_message",
+        "from_username": from_username,
+        "message": message,
+        "time": timestamp
+    }
+    
+    try:
+        response_data = json.dumps(private_msg).encode('utf-8')
+        if client_keys[target_socket].get('encrypted'):
+            encrypted_data = hybrid_encrypt(response_data, client_keys[target_socket]['peer_public_key'])
+            send_with_length(target_socket, encrypted_data)
+        else:
+            send_with_length(target_socket, response_data)
+        logging.info(f"私聊消息从 {from_username} 发送到 {target_username}")
+    except Exception as e:
+        logging.error(f"发送私聊消息失败: {e}")
+
+def send_room_response(client_socket, action, success, message, room_name):
+    """发送房间操作响应"""
+    response = {
+        "command": "room_response",
+        "action": action,
+        "success": success,
+        "message": message,
+        "room_name": room_name
+    }
+    
+    try:
+        response_data = json.dumps(response).encode('utf-8')
+        if client_keys[client_socket].get('encrypted'):
+            encrypted_data = hybrid_encrypt(response_data, client_keys[client_socket]['peer_public_key'])
+            send_with_length(client_socket, encrypted_data)
+        else:
+            send_with_length(client_socket, response_data)
+    except Exception as e:
+        logging.error(f"发送房间响应失败: {e}")
+
+def broadcast_users_update(room_name):
+    """广播用户列表更新"""
+    if room_name not in rooms:
+        return
+    
+    users_data = []
+    for user_socket in rooms[room_name]["users"]:
+        username = client_usernames.get(user_socket, "未知用户")
+        users_data.append({
+            "username": username,
+            "status": "online"
+        })
+    
+    response = {
+        "command": "users_update",
+        "room_name": room_name,
+        "users": users_data
+    }
+    
+    # 向房间内所有用户广播
+    for user_socket in rooms[room_name]["users"][:]:
+        try:
+            response_data = json.dumps(response).encode('utf-8')
+            if client_keys[user_socket].get('encrypted'):
+                encrypted_data = hybrid_encrypt(response_data, client_keys[user_socket]['peer_public_key'])
+                send_with_length(user_socket, encrypted_data)
+            else:
+                send_with_length(user_socket, response_data)
+        except Exception as e:
+            logging.error(f"广播用户列表更新失败: {e}")
+
+def broadcast_rooms_update():
+    """广播房间列表更新"""
+    rooms_data = []
+    for room_name, room_info in rooms.items():
+        rooms_data.append({
+            "name": room_name,
+            "user_count": len(room_info["users"]),
+            "created_time": room_info["created_time"]
+        })
+    
+    response = {
+        "command": "rooms_update",
+        "rooms": rooms_data
+    }
+    
+    # 向所有客户端广播
+    for client in clients[:]:
+        try:
+            response_data = json.dumps(response).encode('utf-8')
+            if client_keys[client].get('encrypted'):
+                encrypted_data = hybrid_encrypt(response_data, client_keys[client]['peer_public_key'])
+                send_with_length(client, encrypted_data)
+            else:
+                send_with_length(client, response_data)
+        except Exception as e:
+            logging.error(f"广播房间列表更新失败: {e}")
 
 if __name__ == "__main__":
   start_server()
